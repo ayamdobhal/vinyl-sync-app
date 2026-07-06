@@ -1,0 +1,31 @@
+name: Windows Agent
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore windows-tray-agent/VinylSync.Agent/VinylSync.Agent.csproj
+      - name: Publish
+        run: >
+          dotnet publish windows-tray-agent/VinylSync.Agent/VinylSync.Agent.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/windows-agent
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vinyl-sync-windows-agent
+          path: publish/windows-agent
