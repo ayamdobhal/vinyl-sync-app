@@ -23,8 +23,6 @@ internal sealed class TrayApp : IDisposable
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly ToolStripMenuItem _deviceMenu = new("Select input device");
-    private readonly ToolStripMenuItem _startMenu = new("Start streaming");
-    private readonly ToolStripMenuItem _stopMenu = new("Stop streaming");
     private readonly ToolStripMenuItem _statusMenu = new("Waiting");
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore = new();
@@ -35,16 +33,11 @@ internal sealed class TrayApp : IDisposable
     {
         _config = _configStore.Load();
         _statusMenu.Enabled = false;
-        _stopMenu.Enabled = false;
-        _startMenu.Click += async (_, _) => await RunTrayAction(StartStreaming);
-        _stopMenu.Click += async (_, _) => await RunTrayAction(StopStreaming);
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusMenu);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_deviceMenu);
-        menu.Items.Add(_startMenu);
-        menu.Items.Add(_stopMenu);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, async (_, _) =>
         {
@@ -61,6 +54,7 @@ internal sealed class TrayApp : IDisposable
         };
 
         RefreshDevices();
+        _ = RunTrayAction(StartStreaming);
     }
 
     private async Task RunTrayAction(Func<Task> action)
@@ -89,13 +83,14 @@ internal sealed class TrayApp : IDisposable
             {
                 Checked = device.ID == _config.DeviceId
             };
-            item.Click += (_, _) =>
+            item.Click += async (_, _) =>
             {
                 _config.DeviceId = device.ID;
                 _config.DeviceName = device.FriendlyName;
                 _configStore.Save(_config);
                 RefreshDevices();
                 SetStatus($"Selected {device.FriendlyName}");
+                await RunTrayAction(RestartStreaming);
             };
             _deviceMenu.DropDownItems.Add(item);
         }
@@ -123,9 +118,13 @@ internal sealed class TrayApp : IDisposable
         _configStore.Save(_config);
 
         _streamer = new AudioStreamer(_config, device, SetStatus);
-        _startMenu.Enabled = false;
-        _stopMenu.Enabled = true;
         await _streamer.Start();
+    }
+
+    private async Task RestartStreaming()
+    {
+        await StopStreaming();
+        await StartStreaming();
     }
 
     private async Task StopStreaming()
@@ -139,8 +138,6 @@ internal sealed class TrayApp : IDisposable
         {
             _streamer.Dispose();
             _streamer = null;
-            _startMenu.Enabled = true;
-            _stopMenu.Enabled = false;
             SetStatus("Stopped");
         }
     }

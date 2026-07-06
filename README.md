@@ -54,10 +54,10 @@ Windows builds are produced by GitHub Actions. The app is a system tray agent wi
 
 ```text
 Select Input Device
-Start Streaming
-Stop Streaming
 Exit
 ```
+
+The agent starts streaming as soon as it launches. Selecting a different input device restarts the stream with that device. To stop streaming, exit the tray app.
 
 The agent stores configuration at:
 
