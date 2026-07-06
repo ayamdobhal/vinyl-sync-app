@@ -123,44 +123,52 @@ final class CoordinatorServer {
           $0.audioConnected = true
           $0.lastSeen = Date()
         }
-        self.readWebSocketFrame(connection: connection)
+        self.readWebSocketFrames(connection: connection, buffer: Data())
       } else {
         connection.cancel()
       }
     })
   }
 
-  private func readWebSocketFrame(connection: NWConnection) {
-    connection.receive(minimumIncompleteLength: 2, maximumLength: 64 * 1024) { data, _, isComplete, error in
+  private func readWebSocketFrames(connection: NWConnection, buffer: Data) {
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
       guard error == nil, let data, !data.isEmpty else {
         self.state.update { $0.audioConnected = false }
         connection.cancel()
         return
       }
 
+      var nextBuffer = buffer
+      nextBuffer.append(data)
+
       do {
-        let frame = try WebSocketFrame.parse(data)
-        switch frame.opcode {
-        case 1:
-          self.handleHello(frame.payload)
-        case 2:
-          self.handleAudio(frame.payload)
-        case 8:
-          self.state.update { $0.audioConnected = false }
-          connection.cancel()
-          return
-        default:
-          break
+        while let parsed = try WebSocketFrame.parseNext(nextBuffer) {
+          nextBuffer.removeFirst(parsed.consumedBytes)
+          switch parsed.frame.opcode {
+          case 1:
+            self.handleHello(parsed.frame.payload)
+          case 2:
+            self.handleAudio(parsed.frame.payload)
+          case 8:
+            self.state.update { $0.audioConnected = false }
+            connection.cancel()
+            return
+          default:
+            break
+          }
         }
       } catch {
         print("websocket parse error: \(error.localizedDescription)")
+        self.state.update { $0.audioConnected = false }
+        connection.cancel()
+        return
       }
 
       if isComplete {
         self.state.update { $0.audioConnected = false }
         connection.cancel()
       } else {
-        self.readWebSocketFrame(connection: connection)
+        self.readWebSocketFrames(connection: connection, buffer: nextBuffer)
       }
     }
   }
@@ -245,9 +253,9 @@ struct WebSocketFrame {
   let opcode: UInt8
   let payload: Data
 
-  static func parse(_ data: Data) throws -> WebSocketFrame {
+  static func parseNext(_ data: Data) throws -> (frame: WebSocketFrame, consumedBytes: Int)? {
     let bytes = [UInt8](data)
-    guard bytes.count >= 2 else { throw ParseError.shortFrame }
+    guard bytes.count >= 2 else { return nil }
 
     let opcode = bytes[0] & 0x0f
     let masked = (bytes[1] & 0x80) != 0
@@ -255,21 +263,25 @@ struct WebSocketFrame {
     var index = 2
 
     if length == 126 {
-      guard bytes.count >= index + 2 else { throw ParseError.shortFrame }
+      guard bytes.count >= index + 2 else { return nil }
       length = Int(bytes[index]) << 8 | Int(bytes[index + 1])
       index += 2
     } else if length == 127 {
-      throw ParseError.unsupportedLength
+      guard bytes.count >= index + 8 else { return nil }
+      let wideLength = bytes[index..<index + 8].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+      guard wideLength <= UInt64(Int.max) else { throw ParseError.unsupportedLength }
+      length = Int(wideLength)
+      index += 8
     }
 
     var mask: [UInt8] = []
     if masked {
-      guard bytes.count >= index + 4 else { throw ParseError.shortFrame }
+      guard bytes.count >= index + 4 else { return nil }
       mask = Array(bytes[index..<index + 4])
       index += 4
     }
 
-    guard bytes.count >= index + length else { throw ParseError.shortFrame }
+    guard bytes.count >= index + length else { return nil }
     var payload = Array(bytes[index..<index + length])
 
     if masked {
@@ -278,11 +290,10 @@ struct WebSocketFrame {
       }
     }
 
-    return WebSocketFrame(opcode: opcode, payload: Data(payload))
+    return (WebSocketFrame(opcode: opcode, payload: Data(payload)), index + length)
   }
 
   enum ParseError: Error {
-    case shortFrame
     case unsupportedLength
   }
 }

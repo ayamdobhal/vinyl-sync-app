@@ -36,8 +36,8 @@ internal sealed class TrayApp : IDisposable
         _config = _configStore.Load();
         _statusMenu.Enabled = false;
         _stopMenu.Enabled = false;
-        _startMenu.Click += async (_, _) => await StartStreaming();
-        _stopMenu.Click += async (_, _) => await StopStreaming();
+        _startMenu.Click += async (_, _) => await RunTrayAction(StartStreaming);
+        _stopMenu.Click += async (_, _) => await RunTrayAction(StopStreaming);
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusMenu);
@@ -48,7 +48,7 @@ internal sealed class TrayApp : IDisposable
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, async (_, _) =>
         {
-            await StopStreaming();
+            await RunTrayAction(StopStreaming);
             Application.Exit();
         });
 
@@ -61,6 +61,18 @@ internal sealed class TrayApp : IDisposable
         };
 
         RefreshDevices();
+    }
+
+    private async Task RunTrayAction(Func<Task> action)
+    {
+        try
+        {
+            await action();
+        }
+        catch (Exception error)
+        {
+            SetStatus(error.Message);
+        }
     }
 
     private void RefreshDevices()
@@ -119,12 +131,18 @@ internal sealed class TrayApp : IDisposable
     private async Task StopStreaming()
     {
         if (_streamer == null) return;
-        await _streamer.Stop();
-        _streamer.Dispose();
-        _streamer = null;
-        _startMenu.Enabled = true;
-        _stopMenu.Enabled = false;
-        SetStatus("Stopped");
+        try
+        {
+            await _streamer.Stop();
+        }
+        finally
+        {
+            _streamer.Dispose();
+            _streamer = null;
+            _startMenu.Enabled = true;
+            _stopMenu.Enabled = false;
+            SetStatus("Stopped");
+        }
     }
 
     private void SetStatus(string value)
@@ -196,19 +214,45 @@ internal sealed class AudioStreamer : IDisposable
 
     public async Task Stop()
     {
-        _cts?.Cancel();
-        _capture?.StopRecording();
-        _capture?.Dispose();
-        _capture = null;
-
-        if (_socket is { State: WebSocketState.Open })
+        try
         {
-            await _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "stopped", CancellationToken.None);
+            _cts?.Cancel();
+            _frames.Writer.TryComplete();
+            _capture?.StopRecording();
+        }
+        catch
+        {
+        }
+        finally
+        {
+            _capture?.Dispose();
+            _capture = null;
         }
 
-        if (_sendLoop != null)
+        try
         {
-            await _sendLoop.WaitAsync(TimeSpan.FromSeconds(1)).ContinueWith(_ => { });
+            if (_socket is { State: WebSocketState.Open or WebSocketState.CloseReceived })
+            {
+                using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+                await _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "stopped", closeCts.Token);
+            }
+        }
+        catch (WebSocketException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        try
+        {
+            if (_sendLoop != null)
+            {
+                await _sendLoop.WaitAsync(TimeSpan.FromSeconds(1));
+            }
+        }
+        catch
+        {
         }
 
         _socket?.Dispose();
