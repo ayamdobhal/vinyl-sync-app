@@ -1258,10 +1258,9 @@ final class CoordinatorServer {
     var release = original
     guard var sides = release["sides"] as? [String: [[String: Any]]] else { return release }
     let query = [release["artists"] as? String, release["name"] as? String].compactMap { $0 }.joined(separator: " ")
-    guard let match = try? spotify.searchAlbums(query: query).first,
-          let id = match["id"] as? String,
-          let spotifyAlbum = try? spotify.albumForAlbum(id: id).album,
-          let spotifyTracks = spotifyAlbum["tracks"] as? [[String: Any]] else {
+    let discogsTracks = flattenedTracks(from: release)
+    guard let spotifyMatch = bestSpotifyMatch(for: release, query: query, discogsTracks: discogsTracks),
+          let spotifyTracks = spotifyMatch.album["tracks"] as? [[String: Any]] else {
       return release
     }
 
@@ -1288,15 +1287,89 @@ final class CoordinatorServer {
 
     release["sides"] = sides
     release["spotifyMatch"] = [
-      "id": id,
-      "name": spotifyAlbum["name"] as? String ?? "",
-      "artists": spotifyAlbum["artists"] as? String ?? "",
-      "image": spotifyAlbum["image"] as? String ?? ""
+      "id": spotifyMatch.id,
+      "name": spotifyMatch.album["name"] as? String ?? "",
+      "artists": spotifyMatch.album["artists"] as? String ?? "",
+      "image": spotifyMatch.album["image"] as? String ?? "",
+      "score": spotifyMatch.score,
+      "trackMatches": spotifyMatch.trackMatches,
+      "trackCount": spotifyTracks.count,
+      "discogsTrackCount": discogsTracks.count,
+      "confidence": spotifyMatch.score >= 70 ? "high" : spotifyMatch.score >= 45 ? "medium" : "low"
     ]
     if (release["image"] as? String ?? "").isEmpty {
-      release["image"] = spotifyAlbum["image"] as? String ?? ""
+      release["image"] = spotifyMatch.album["image"] as? String ?? ""
     }
     return release
+  }
+
+  private struct SpotifyAlbumMatch {
+    var id: String
+    var album: [String: Any]
+    var score: Int
+    var trackMatches: Int
+  }
+
+  private func bestSpotifyMatch(for release: [String: Any], query: String, discogsTracks: [[String: Any]]) -> SpotifyAlbumMatch? {
+    guard let candidates = try? spotify.searchAlbums(query: query), !candidates.isEmpty else { return nil }
+    let releaseTitle = normalizeTitle(release["name"] as? String ?? "")
+    let releaseArtists = normalizeTitle(release["artists"] as? String ?? "")
+    var best: SpotifyAlbumMatch?
+
+    for candidate in candidates.prefix(8) {
+      guard let id = candidate["id"] as? String,
+            let spotifyAlbum = try? spotify.albumForAlbum(id: id).album,
+            let spotifyTracks = spotifyAlbum["tracks"] as? [[String: Any]] else {
+        continue
+      }
+
+      let albumTitle = normalizeTitle(spotifyAlbum["name"] as? String ?? "")
+      let albumArtists = normalizeTitle(spotifyAlbum["artists"] as? String ?? "")
+      let titleMatch = albumTitle == releaseTitle || albumTitle.contains(releaseTitle) || releaseTitle.contains(albumTitle)
+      let artistMatch = !albumArtists.isEmpty && !releaseArtists.isEmpty && (albumArtists.contains(releaseArtists) || releaseArtists.contains(albumArtists))
+      let trackMatches = orderedTitleMatches(discogsTracks: discogsTracks, spotifyTracks: spotifyTracks)
+      let trackCountDelta = abs(spotifyTracks.count - discogsTracks.count)
+
+      var score = 0
+      if titleMatch { score += 35 }
+      if artistMatch { score += 25 }
+      if trackCountDelta == 0 {
+        score += 20
+      } else if trackCountDelta <= 2 {
+        score += 8
+      } else {
+        score -= min(20, trackCountDelta * 2)
+      }
+      if !discogsTracks.isEmpty {
+        score += Int((Double(trackMatches) / Double(discogsTracks.count)) * 40)
+      }
+
+      let match = SpotifyAlbumMatch(id: id, album: spotifyAlbum, score: score, trackMatches: trackMatches)
+      if best == nil || match.score > best!.score {
+        best = match
+      }
+    }
+
+    return best
+  }
+
+  private func flattenedTracks(from release: [String: Any]) -> [[String: Any]] {
+    guard let sides = release["sides"] as? [String: [[String: Any]]] else { return [] }
+    let sideOrder = release["sideOrder"] as? [String] ?? sides.keys.sorted()
+    return sideOrder.flatMap { sides[$0] ?? [] }
+  }
+
+  private func orderedTitleMatches(discogsTracks: [[String: Any]], spotifyTracks: [[String: Any]]) -> Int {
+    var matches = 0
+    for index in 0..<min(discogsTracks.count, spotifyTracks.count) {
+      let discogsTitle = normalizeTitle(discogsTracks[index]["title"] as? String ?? "")
+      let spotifyTitle = normalizeTitle(spotifyTracks[index]["title"] as? String ?? "")
+      if !discogsTitle.isEmpty, !spotifyTitle.isEmpty,
+         (discogsTitle == spotifyTitle || discogsTitle.contains(spotifyTitle) || spotifyTitle.contains(discogsTitle)) {
+        matches += 1
+      }
+    }
+    return matches
   }
 
   private func normalizeTitle(_ value: String) -> String {
@@ -1863,7 +1936,7 @@ func pageHTML() -> String {
           await saveSelectedSide();
           const match = activeAlbum.spotifyMatch;
           hint.textContent = match && match.name
-            ? `Loaded Discogs release. Spotify match: ${match.artists ? match.artists + ' - ' : ''}${match.name}.`
+            ? `Loaded Discogs release. Spotify match: ${match.artists ? match.artists + ' - ' : ''}${match.name} (${match.confidence || 'unknown'}, ${match.trackMatches || 0}/${match.discogsTrackCount || 0} tracks).`
             : 'Loaded Discogs release. No Spotify match attached.';
           await tick();
         }
