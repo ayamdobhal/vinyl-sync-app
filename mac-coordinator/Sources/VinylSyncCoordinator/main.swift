@@ -1459,12 +1459,28 @@ func pageHTML() -> String {
           </div>
 
           <div class="panel">
-            <h2>Album Search</h2>
-            <input id="albumQuery" placeholder="Search Spotify album">
-            <div class="controls">
-              <button onclick="searchAlbums()">Search</button>
+            <h2>Selected Disc</h2>
+            <div class="album">
+              <img class="album-cover" id="albumCover" alt="">
+              <div>
+                <div class="album-title" id="albumTitle">No disc selected</div>
+                <div class="album-meta" id="albumMeta">Select a disc from your Discogs collection.</div>
+                <div class="side-tabs" id="sideTabs"></div>
+              </div>
             </div>
-            <div class="results" id="albumResults"></div>
+            <div class="track-list" id="sideTracks"></div>
+            <div class="controls">
+              <button onclick="saveSelectedSide()">Use side</button>
+              <button class="secondary" onclick="loadTemplate()">Load A Thousand Suns A</button>
+            </div>
+            <div class="hint">Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.</div>
+            <details>
+              <summary>Raw side JSON</summary>
+              <textarea id="sideJson" spellcheck="false"></textarea>
+              <div class="controls">
+                <button onclick="saveSide()">Save JSON side</button>
+              </div>
+            </details>
           </div>
 
           <div class="panel">
@@ -1475,31 +1491,6 @@ func pageHTML() -> String {
             <div class="row"><span class="label">Remaining</span><span class="value" id="trackRemaining">--</span></div>
             <div class="row"><span class="label">Next</span><span class="value" id="nextTrack">--</span></div>
             <div class="timeline"><div class="progress" id="progress"></div></div>
-          </div>
-
-          <div class="panel">
-            <h2>Loaded Album</h2>
-            <div class="album">
-              <img class="album-cover" id="albumCover" alt="">
-              <div>
-                <div class="album-title" id="albumTitle">No album loaded</div>
-                <div class="album-meta" id="albumMeta">Search and load an album from Spotify.</div>
-                <div class="side-tabs" id="sideTabs"></div>
-              </div>
-            </div>
-            <div class="track-list" id="sideTracks"></div>
-            <div class="controls">
-              <button onclick="saveSelectedSide()">Use selected side</button>
-              <button class="secondary" onclick="loadTemplate()">Load A Thousand Suns A</button>
-            </div>
-            <div class="hint">Spotify does not expose vinyl side boundaries; A/B is inferred by duration. Adjust with JSON if needed.</div>
-            <details>
-              <summary>Raw side JSON</summary>
-              <textarea id="sideJson" spellcheck="false"></textarea>
-              <div class="controls">
-                <button onclick="saveSide()">Save JSON side</button>
-              </div>
-            </details>
           </div>
         </section>
       </main>
@@ -1583,17 +1574,17 @@ func pageHTML() -> String {
         }
 
         function renderLoadedAlbum() {
-          const album = activeAlbum || { name: 'No album loaded', artists: '', image: '', tracks: [] };
+          const album = activeAlbum || { name: 'No disc selected', artists: '', image: '', tracks: [] };
           const sides = getAlbumSides(album);
           const keys = getSideKeys(album);
           if (!keys.includes(selectedSide) && keys.length) selectedSide = keys[0];
           const tracks = sides[selectedSide] || [];
-          document.getElementById('albumTitle').textContent = album.name || 'No album loaded';
+          document.getElementById('albumTitle').textContent = album.name || 'No disc selected';
           document.getElementById('albumMeta').textContent = [
             album.artists,
             `${tracks.length} track${tracks.length === 1 ? '' : 's'}`,
             fmt(sideDuration({ tracks }))
-          ].filter(Boolean).join(' / ') || 'Search and load an album from Spotify.';
+          ].filter(Boolean).join(' / ') || 'Select a disc from your Discogs collection.';
 
           const cover = document.getElementById('albumCover');
           cover.hidden = !album.image;
@@ -1672,59 +1663,6 @@ func pageHTML() -> String {
           selectedSide = 'A';
           renderLoadedAlbum();
           document.getElementById('sideJson').value = JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide), null, 2);
-        }
-
-        async function searchAlbums() {
-          const query = document.getElementById('albumQuery').value.trim();
-          if (!query) return;
-          const results = document.getElementById('albumResults');
-          results.textContent = 'Searching...';
-          const response = await fetch('/spotify/search?q=' + encodeURIComponent(query));
-          const data = await response.json();
-          if (!response.ok) {
-            results.textContent = data.error || 'Search failed.';
-            return;
-          }
-          results.innerHTML = '';
-          for (const album of data.albums || []) {
-            const row = document.createElement('div');
-            row.className = 'result';
-            const image = document.createElement('img');
-            image.src = album.image || '';
-            const text = document.createElement('div');
-            const title = document.createElement('div');
-            title.className = 'result-title';
-            title.textContent = album.name;
-            const meta = document.createElement('div');
-            meta.className = 'result-meta';
-            meta.textContent = [album.artists, album.releaseDate].filter(Boolean).join(' / ');
-            text.append(title, meta);
-            const button = document.createElement('button');
-            button.className = 'secondary';
-            button.textContent = 'Load';
-            button.onclick = () => loadAlbum(album.id);
-            row.append(image, text, button);
-            results.append(row);
-          }
-        }
-
-        async function loadAlbum(id) {
-          const response = await fetch('/spotify/load-album', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id })
-          });
-          const data = await response.json();
-          if (!response.ok) {
-            alert(data.error || 'Could not load album.');
-            return;
-          }
-          activeAlbum = data.album || data.side;
-          selectedSide = 'A';
-          renderLoadedAlbum();
-          document.getElementById('sideJson').value = JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide), null, 2);
-          await saveSelectedSide();
-          await tick();
         }
 
         async function loadDiscogsCollection() {
