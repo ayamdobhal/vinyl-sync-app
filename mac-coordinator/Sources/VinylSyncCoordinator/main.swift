@@ -35,8 +35,41 @@ struct PlaybackRequest {
 
 struct SyncSettings: Codable {
   var spotifyOffsetSeconds: Double
+  var activityThreshold: Double
+  var silenceThreshold: Double
+  var transitionSilenceSeconds: Double
+  var transitionWindowSeconds: Double
 
-  static let `default` = SyncSettings(spotifyOffsetSeconds: 0)
+  static let `default` = SyncSettings(
+    spotifyOffsetSeconds: 0,
+    activityThreshold: 0.0010,
+    silenceThreshold: 0.00045,
+    transitionSilenceSeconds: 1.6,
+    transitionWindowSeconds: 35
+  )
+
+  init(
+    spotifyOffsetSeconds: Double = 0,
+    activityThreshold: Double = 0.0010,
+    silenceThreshold: Double = 0.00045,
+    transitionSilenceSeconds: Double = 1.6,
+    transitionWindowSeconds: Double = 35
+  ) {
+    self.spotifyOffsetSeconds = spotifyOffsetSeconds
+    self.activityThreshold = activityThreshold
+    self.silenceThreshold = silenceThreshold
+    self.transitionSilenceSeconds = transitionSilenceSeconds
+    self.transitionWindowSeconds = transitionWindowSeconds
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    spotifyOffsetSeconds = try container.decodeIfPresent(Double.self, forKey: .spotifyOffsetSeconds) ?? Self.default.spotifyOffsetSeconds
+    activityThreshold = try container.decodeIfPresent(Double.self, forKey: .activityThreshold) ?? Self.default.activityThreshold
+    silenceThreshold = try container.decodeIfPresent(Double.self, forKey: .silenceThreshold) ?? Self.default.silenceThreshold
+    transitionSilenceSeconds = try container.decodeIfPresent(Double.self, forKey: .transitionSilenceSeconds) ?? Self.default.transitionSilenceSeconds
+    transitionWindowSeconds = try container.decodeIfPresent(Double.self, forKey: .transitionWindowSeconds) ?? Self.default.transitionWindowSeconds
+  }
 }
 
 struct SpotifyStatus {
@@ -538,6 +571,7 @@ struct SyncSnapshot {
   var needleDropAt: Date?
   var event = "waiting"
   var playedTrackIndex: Int?
+  var pendingTrackIndex: Int?
   var settings = SyncSettings.default
 }
 
@@ -545,11 +579,6 @@ final class StateStore {
   private let lock = NSLock()
   private var snapshot = SyncSnapshot()
   private let settingsURL = URL(fileURLWithPath: ".state/sync-settings.json")
-
-  private let activityThreshold: Float = 0.0010
-  private let silenceThreshold: Float = 0.00045
-  private let transitionSilenceSeconds = 1.6
-  private let transitionWindowSeconds = 35.0
 
   init() {
     snapshot.settings = Self.loadSettings(from: settingsURL)
@@ -574,6 +603,7 @@ final class StateStore {
     snapshot.nextTrackTitle = nextTrackTitleLocked(after: 0)
     snapshot.needleDropAt = nil
     snapshot.playedTrackIndex = nil
+    snapshot.pendingTrackIndex = nil
     snapshot.silenceSeconds = 0
     snapshot.audioActive = false
     snapshot.event = "armed"
@@ -613,6 +643,7 @@ final class StateStore {
     snapshot.currentTrackTitle = snapshot.sidePlan.tracks[nextIndex].title
     snapshot.nextTrackTitle = nextTrackTitleLocked(after: nextIndex)
     snapshot.silenceSeconds = 0
+    snapshot.pendingTrackIndex = nil
     snapshot.mode = "running"
     snapshot.event = "manual next"
     let request = playbackRequestLocked(reason: "manual next")
@@ -646,10 +677,11 @@ final class StateStore {
     snapshot.rms = rms
     snapshot.lastSeen = Date()
 
-    let activeNow = rms >= activityThreshold
+    let settings = snapshot.settings
+    let activeNow = rms >= Float(settings.activityThreshold)
     if activeNow {
       snapshot.silenceSeconds = 0
-    } else if rms <= silenceThreshold {
+    } else if rms <= Float(settings.silenceThreshold) {
       snapshot.silenceSeconds += delta
     }
 
@@ -666,19 +698,24 @@ final class StateStore {
       snapshot.sideElapsedSeconds += delta
 
       let wasActive = snapshot.audioActive
-      snapshot.audioActive = activeNow || (snapshot.silenceSeconds < transitionSilenceSeconds)
+      snapshot.audioActive = activeNow || (snapshot.silenceSeconds < settings.transitionSilenceSeconds)
 
-      let previousIndex = snapshot.currentTrackIndex
-      updateTrackFromTimelineLocked()
-      if snapshot.currentTrackIndex != previousIndex {
-        request = playbackRequestLocked(reason: "timeline")
-      }
-
-      if wasActive,
-         snapshot.silenceSeconds >= transitionSilenceSeconds,
-         shouldSnapToNextTrackLocked() {
-        snapToNextTrackLocked(event: "silence gap")
-        request = playbackRequestLocked(reason: "silence gap")
+      if activeNow {
+        if let pendingTrackIndex = snapshot.pendingTrackIndex {
+          snapToTrackStartLocked(pendingTrackIndex, event: "track start")
+          request = playbackRequestLocked(reason: "track start")
+        } else {
+          let previousIndex = snapshot.currentTrackIndex
+          updateTrackFromTimelineLocked()
+          if snapshot.currentTrackIndex != previousIndex {
+            request = playbackRequestLocked(reason: "timeline")
+          }
+        }
+      } else if wasActive,
+                snapshot.silenceSeconds >= settings.transitionSilenceSeconds,
+                shouldPrepareNextTrackLocked() {
+        snapshot.pendingTrackIndex = snapshot.currentTrackIndex + 1
+        snapshot.event = "waiting for next track start"
       }
     default:
       snapshot.audioActive = activeNow
@@ -707,6 +744,7 @@ final class StateStore {
     snapshot.nextTrackTitle = nextTrackTitleLocked(after: 0)
     snapshot.needleDropAt = nil
     snapshot.playedTrackIndex = nil
+    snapshot.pendingTrackIndex = nil
     snapshot.event = event
   }
 
@@ -758,18 +796,17 @@ final class StateStore {
     snapshot.nextTrackTitle = nextTrackTitleLocked(after: selectedIndex)
   }
 
-  private func shouldSnapToNextTrackLocked() -> Bool {
+  private func shouldPrepareNextTrackLocked() -> Bool {
     guard snapshot.currentTrackIndex + 1 < snapshot.sidePlan.tracks.count else { return false }
-    return snapshot.currentTrackRemainingSeconds <= transitionWindowSeconds
-      || snapshot.currentTrackElapsedSeconds >= 30
+    return snapshot.currentTrackRemainingSeconds <= snapshot.settings.transitionWindowSeconds
   }
 
-  private func snapToNextTrackLocked(event: String) {
-    let nextIndex = snapshot.currentTrackIndex + 1
-    guard snapshot.sidePlan.tracks.indices.contains(nextIndex) else { return }
-    snapshot.sideElapsedSeconds = elapsedAtTrackStartLocked(nextIndex)
+  private func snapToTrackStartLocked(_ index: Int, event: String) {
+    guard snapshot.sidePlan.tracks.indices.contains(index) else { return }
+    snapshot.sideElapsedSeconds = elapsedAtTrackStartLocked(index)
     updateTrackFromTimelineLocked()
     snapshot.silenceSeconds = 0
+    snapshot.pendingTrackIndex = nil
     snapshot.event = event
   }
 
@@ -978,7 +1015,25 @@ final class CoordinatorServer {
         let offset = json["spotifyOffsetSeconds"] as? Double
           ?? (json["spotifyOffsetSeconds"] as? Int).map(Double.init)
           ?? 0
-        state.updateSettings(SyncSettings(spotifyOffsetSeconds: max(-30, min(30, offset))))
+        let activityThreshold = json["activityThreshold"] as? Double
+          ?? (json["activityThreshold"] as? Int).map(Double.init)
+          ?? SyncSettings.default.activityThreshold
+        let silenceThreshold = json["silenceThreshold"] as? Double
+          ?? (json["silenceThreshold"] as? Int).map(Double.init)
+          ?? SyncSettings.default.silenceThreshold
+        let transitionSilenceSeconds = json["transitionSilenceSeconds"] as? Double
+          ?? (json["transitionSilenceSeconds"] as? Int).map(Double.init)
+          ?? SyncSettings.default.transitionSilenceSeconds
+        let transitionWindowSeconds = json["transitionWindowSeconds"] as? Double
+          ?? (json["transitionWindowSeconds"] as? Int).map(Double.init)
+          ?? SyncSettings.default.transitionWindowSeconds
+        state.updateSettings(SyncSettings(
+          spotifyOffsetSeconds: max(-30, min(30, offset)),
+          activityThreshold: max(0.00001, min(0.1, activityThreshold)),
+          silenceThreshold: max(0.00001, min(0.1, silenceThreshold)),
+          transitionSilenceSeconds: max(0.2, min(10, transitionSilenceSeconds)),
+          transitionWindowSeconds: max(1, min(120, transitionWindowSeconds))
+        ))
         respondJSON(connection: connection, status: 200, body: ["ok": true])
       } catch {
         respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
@@ -1139,7 +1194,12 @@ final class CoordinatorServer {
       "needleDropAt": snapshot.needleDropAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
       "event": snapshot.event,
       "settings": [
-        "spotifyOffsetSeconds": snapshot.settings.spotifyOffsetSeconds
+        "spotifyOffsetSeconds": snapshot.settings.spotifyOffsetSeconds,
+        "activityThreshold": snapshot.settings.activityThreshold,
+        "silenceThreshold": snapshot.settings.silenceThreshold,
+        "transitionSilenceSeconds": snapshot.settings.transitionSilenceSeconds,
+        "transitionWindowSeconds": snapshot.settings.transitionWindowSeconds,
+        "pendingTrackIndex": snapshot.pendingTrackIndex.map { $0 as Any } ?? NSNull()
       ],
       "spotify": spotifyPayload(),
       "discogs": discogsPayload()
@@ -1420,6 +1480,9 @@ func pageHTML() -> String {
         button { border: 1px solid #1f2328; background: #1f2328; color: white; border-radius: 6px; padding: 9px 12px; font: inherit; cursor: pointer; }
         button.secondary { background: transparent; color: #1f2328; }
         input { width: 100%; border: 1px solid #d8cdc0; border-radius: 6px; padding: 10px; font: inherit; background: #fff; color: #1f2328; }
+        .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+        .field-label { display: grid; gap: 4px; color: #6b6258; font-size: 12px; }
+        .field-label input { font-size: 14px; }
         textarea { width: 100%; min-height: 220px; resize: vertical; border: 1px solid #d8cdc0; border-radius: 6px; padding: 10px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: #fff; color: #1f2328; }
         .timeline { margin-top: 12px; height: 16px; border-radius: 999px; overflow: hidden; background: #e3d7ca; }
         .progress { height: 100%; width: 0%; background: #8d3f2f; transition: width 160ms linear; }
@@ -1473,17 +1536,23 @@ func pageHTML() -> String {
             <div class="row"><span class="label">Side elapsed</span><span class="value" id="sideElapsed">--</span></div>
             <div class="row"><span class="label">Needle drop</span><span class="value" id="needleDrop">--</span></div>
             <div class="row"><span class="label">Spotify offset</span><span class="value" id="spotifyOffsetLabel">--</span></div>
-            <input id="spotifyOffset" type="number" min="-30" max="30" step="0.25" value="0">
+            <div class="settings-grid">
+              <label class="field-label">Spotify offset <input id="spotifyOffset" type="number" min="-30" max="30" step="0.25" value="0"></label>
+              <label class="field-label">Active RMS <input id="activityThreshold" type="number" min="0.00001" max="0.1" step="0.0001" value="0.001"></label>
+              <label class="field-label">Silence RMS <input id="silenceThreshold" type="number" min="0.00001" max="0.1" step="0.0001" value="0.00045"></label>
+              <label class="field-label">Gap seconds <input id="transitionSilenceSeconds" type="number" min="0.2" max="10" step="0.1" value="1.6"></label>
+              <label class="field-label">Boundary window <input id="transitionWindowSeconds" type="number" min="1" max="120" step="1" value="35"></label>
+            </div>
             <div class="controls">
               <button onclick="post('/sync/arm')">Arm</button>
               <button class="secondary" onclick="post('/sync/next')">Next track</button>
               <button class="secondary" onclick="post('/spotify/play-current')">Play current muted</button>
               <button class="secondary" onclick="nudgeOffset(-1)">-1s</button>
               <button class="secondary" onclick="nudgeOffset(1)">+1s</button>
-              <button class="secondary" onclick="saveOffset()">Save offset</button>
+              <button class="secondary" onclick="saveSyncSettings()">Save settings</button>
               <button class="secondary" onclick="post('/sync/reset')">Reset</button>
             </div>
-            <div class="hint">Positive offset starts Spotify later in the track; negative starts it earlier.</div>
+            <div class="hint">Silence near a boundary now waits for vinyl audio to return before starting the next Spotify track.</div>
           </div>
 
           <div class="panel">
@@ -1703,17 +1772,22 @@ func pageHTML() -> String {
           await tick();
         }
 
-        async function saveOffset() {
-          const input = document.getElementById('spotifyOffset');
-          const value = Number(input.value || 0);
+        async function saveSyncSettings() {
+          const value = (id) => Number(document.getElementById(id).value || 0);
           const response = await fetch('/sync/settings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ spotifyOffsetSeconds: value })
+            body: JSON.stringify({
+              spotifyOffsetSeconds: value('spotifyOffset'),
+              activityThreshold: value('activityThreshold'),
+              silenceThreshold: value('silenceThreshold'),
+              transitionSilenceSeconds: value('transitionSilenceSeconds'),
+              transitionWindowSeconds: value('transitionWindowSeconds')
+            })
           });
           if (!response.ok) {
-            const data = await response.json().catch(() => ({ error: 'Could not save offset.' }));
-            alert(data.error || 'Could not save offset.');
+            const data = await response.json().catch(() => ({ error: 'Could not save settings.' }));
+            alert(data.error || 'Could not save settings.');
           }
           await tick();
         }
@@ -1721,7 +1795,7 @@ func pageHTML() -> String {
         async function nudgeOffset(delta) {
           const input = document.getElementById('spotifyOffset');
           input.value = (Number(input.value || 0) + delta).toFixed(2);
-          await saveOffset();
+          await saveSyncSettings();
         }
 
         async function saveSide() {
@@ -1816,6 +1890,19 @@ func pageHTML() -> String {
           const offsetInput = document.getElementById('spotifyOffset');
           if (document.activeElement !== offsetInput) {
             offsetInput.value = offset.toFixed(2);
+          }
+          const syncInputDefaults = {
+            activityThreshold: 0.001,
+            silenceThreshold: 0.00045,
+            transitionSilenceSeconds: 1.6,
+            transitionWindowSeconds: 35
+          };
+          for (const [id, fallback] of Object.entries(syncInputDefaults)) {
+            const input = document.getElementById(id);
+            if (document.activeElement !== input) {
+              const value = Number(settings[id] ?? fallback);
+              input.value = id.includes('Threshold') ? value.toFixed(5) : value.toFixed(1);
+            }
           }
           document.getElementById('sideName').textContent = side.name || '--';
           document.getElementById('track').textContent = `${Number(status.currentTrackIndex || 0) + 1}. ${status.currentTrackTitle}`;
