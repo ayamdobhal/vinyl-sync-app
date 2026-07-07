@@ -140,10 +140,11 @@ final class SpotifyClient {
     }
   }
 
-  func sidePlanForAlbum(id: String) throws -> SidePlan {
+  func albumForAlbum(id: String) throws -> (sidePlan: SidePlan, album: [String: Any]) {
     let album = try api("GET", "/albums/\(id)")
     let name = album["name"] as? String ?? "Spotify album"
     let artists = ((album["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }.joined(separator: ", ")
+    let image = (((album["images"] as? [[String: Any]]) ?? []).first?["url"] as? String) ?? ""
     let items = ((album["tracks"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
     let tracks = items.map { item in
       SideTrack(
@@ -152,7 +153,17 @@ final class SpotifyClient {
         uri: item["uri"] as? String
       )
     }
-    return SidePlan(name: artists.isEmpty ? name : "\(artists) - \(name)", tracks: tracks)
+    let sidePlan = SidePlan(name: artists.isEmpty ? name : "\(artists) - \(name)", tracks: tracks)
+    let albumPayload: [String: Any] = [
+      "id": id,
+      "name": name,
+      "artists": artists,
+      "image": image,
+      "tracks": tracks.map {
+        ["title": $0.title, "durationSeconds": $0.durationSeconds, "uri": $0.uri ?? ""] as [String: Any]
+      }
+    ]
+    return (sidePlan, albumPayload)
   }
 
   func play(uri: String, positionMs: Int, reason: String) {
@@ -695,9 +706,13 @@ final class CoordinatorServer {
           respondJSON(connection: connection, status: 400, body: ["error": "Missing album id."])
           return
         }
-        let plan = try spotify.sidePlanForAlbum(id: id)
-        state.configureSide(plan)
-        respondJSON(connection: connection, status: 200, body: ["ok": true, "side": sidePayload(plan)])
+        let album = try spotify.albumForAlbum(id: id)
+        state.configureSide(album.sidePlan)
+        respondJSON(connection: connection, status: 200, body: [
+          "ok": true,
+          "side": sidePayload(album.sidePlan),
+          "album": album.album
+        ])
       } catch {
         respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
       }
@@ -1091,6 +1106,20 @@ func pageHTML() -> String {
         .avatar { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: #e3d7ca; border: 1px solid #d8cdc0; }
         .profile-name { font-weight: 700; }
         .profile-state { color: #2d6a5f; font-size: 13px; }
+        .album { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 14px; align-items: start; }
+        .album-cover { width: 92px; height: 92px; border-radius: 6px; object-fit: cover; background: #e3d7ca; border: 1px solid #d8cdc0; }
+        .album-title { font-weight: 800; font-size: 17px; overflow-wrap: anywhere; }
+        .album-meta { color: #6b6258; font-size: 13px; margin-top: 3px; }
+        .side-tabs { display: flex; gap: 8px; margin-top: 12px; }
+        .side-tabs button { min-width: 46px; }
+        .side-tabs button.active { background: #8d3f2f; border-color: #8d3f2f; color: #fff; }
+        .track-list { display: grid; gap: 6px; margin-top: 12px; }
+        .track-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border: 1px solid #eee2d6; border-radius: 6px; background: #fff; }
+        .track-index { color: #6b6258; font-variant-numeric: tabular-nums; }
+        .track-title { font-weight: 650; overflow-wrap: anywhere; }
+        .track-time { color: #6b6258; font-variant-numeric: tabular-nums; }
+        details { margin-top: 12px; }
+        summary { cursor: pointer; color: #6b6258; }
         @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } body { padding: 14px; } }
       </style>
     </head>
@@ -1165,19 +1194,39 @@ func pageHTML() -> String {
           </div>
 
           <div class="panel">
-            <h2>Side Plan</h2>
-            <textarea id="sideJson" spellcheck="false"></textarea>
+            <h2>Loaded Album</h2>
+            <div class="album">
+              <img class="album-cover" id="albumCover" alt="">
+              <div>
+                <div class="album-title" id="albumTitle">No album loaded</div>
+                <div class="album-meta" id="albumMeta">Search and load an album from Spotify.</div>
+                <div class="side-tabs">
+                  <button id="sideAButton" onclick="selectSide('A')">A</button>
+                  <button id="sideBButton" class="secondary" onclick="selectSide('B')">B</button>
+                </div>
+              </div>
+            </div>
+            <div class="track-list" id="sideTracks"></div>
             <div class="controls">
-              <button onclick="saveSide()">Save side</button>
+              <button onclick="saveSelectedSide()">Use selected side</button>
               <button class="secondary" onclick="loadTemplate()">Load A Thousand Suns A</button>
             </div>
-            <div class="hint">Durations are seconds. Arm after saving, then drop the needle.</div>
+            <div class="hint">Spotify does not expose vinyl side boundaries; A/B is inferred by duration. Adjust with JSON if needed.</div>
+            <details>
+              <summary>Raw side JSON</summary>
+              <textarea id="sideJson" spellcheck="false"></textarea>
+              <div class="controls">
+                <button onclick="saveSide()">Save JSON side</button>
+              </div>
+            </details>
           </div>
         </section>
       </main>
       <script>
         const template = {
           name: 'A Thousand Suns - Side A',
+          artists: 'Linkin Park',
+          image: '',
           tracks: [
             { title: 'The Requiem', durationSeconds: 121, uri: '' },
             { title: 'The Radiance', durationSeconds: 57, uri: '' },
@@ -1187,6 +1236,8 @@ func pageHTML() -> String {
             { title: 'Robot Boy', durationSeconds: 269, uri: '' }
           ]
         };
+        let activeAlbum = template;
+        let selectedSide = 'A';
 
         function fmt(seconds) {
           const value = Math.max(0, Number(seconds || 0));
@@ -1197,6 +1248,91 @@ func pageHTML() -> String {
 
         function sideDuration(side) {
           return (side.tracks || []).reduce((sum, track) => sum + Number(track.durationSeconds || 0), 0);
+        }
+
+        function splitAlbumSides(album) {
+          const tracks = album.tracks || [];
+          if (tracks.length <= 1) return { A: tracks, B: [] };
+          const total = sideDuration(album);
+          const half = total / 2;
+          let elapsed = 0;
+          let splitIndex = tracks.length;
+          for (let index = 0; index < tracks.length - 1; index++) {
+            elapsed += Number(tracks[index].durationSeconds || 0);
+            if (elapsed >= half) {
+              splitIndex = index + 1;
+              break;
+            }
+          }
+          return {
+            A: tracks.slice(0, splitIndex),
+            B: tracks.slice(splitIndex)
+          };
+        }
+
+        function sidePlanFromAlbum(album, sideKey) {
+          const sides = splitAlbumSides(album);
+          const tracks = sideKey === 'B' ? sides.B : sides.A;
+          return {
+            name: `${album.artists ? album.artists + ' - ' : ''}${album.name} - Side ${sideKey}`,
+            tracks
+          };
+        }
+
+        function renderLoadedAlbum() {
+          const album = activeAlbum || { name: 'No album loaded', artists: '', image: '', tracks: [] };
+          const sides = splitAlbumSides(album);
+          const tracks = selectedSide === 'B' ? sides.B : sides.A;
+          document.getElementById('albumTitle').textContent = album.name || 'No album loaded';
+          document.getElementById('albumMeta').textContent = [
+            album.artists,
+            `${tracks.length} track${tracks.length === 1 ? '' : 's'}`,
+            fmt(sideDuration({ tracks }))
+          ].filter(Boolean).join(' / ') || 'Search and load an album from Spotify.';
+
+          const cover = document.getElementById('albumCover');
+          cover.hidden = !album.image;
+          cover.src = album.image || '';
+
+          document.getElementById('sideAButton').classList.toggle('active', selectedSide === 'A');
+          document.getElementById('sideAButton').classList.toggle('secondary', selectedSide !== 'A');
+          document.getElementById('sideBButton').classList.toggle('active', selectedSide === 'B');
+          document.getElementById('sideBButton').classList.toggle('secondary', selectedSide !== 'B');
+          document.getElementById('sideBButton').disabled = sides.B.length === 0;
+
+          const list = document.getElementById('sideTracks');
+          list.innerHTML = '';
+          if (!tracks.length) {
+            list.textContent = 'No tracks for this side.';
+            return;
+          }
+          tracks.forEach((track, index) => {
+            const row = document.createElement('div');
+            row.className = 'track-item';
+            const number = document.createElement('div');
+            number.className = 'track-index';
+            number.textContent = String(index + 1).padStart(2, '0');
+            const title = document.createElement('div');
+            title.className = 'track-title';
+            title.textContent = track.title;
+            const time = document.createElement('div');
+            time.className = 'track-time';
+            time.textContent = fmt(track.durationSeconds);
+            row.append(number, title, time);
+            list.append(row);
+          });
+        }
+
+        async function selectSide(sideKey) {
+          selectedSide = sideKey;
+          renderLoadedAlbum();
+          await saveSelectedSide();
+        }
+
+        async function saveSelectedSide() {
+          const plan = sidePlanFromAlbum(activeAlbum, selectedSide);
+          document.getElementById('sideJson').value = JSON.stringify(plan, null, 2);
+          await saveSide();
         }
 
         async function post(path) {
@@ -1223,7 +1359,10 @@ func pageHTML() -> String {
         }
 
         function loadTemplate() {
-          document.getElementById('sideJson').value = JSON.stringify(template, null, 2);
+          activeAlbum = template;
+          selectedSide = 'A';
+          renderLoadedAlbum();
+          document.getElementById('sideJson').value = JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide), null, 2);
         }
 
         async function searchAlbums() {
@@ -1271,7 +1410,11 @@ func pageHTML() -> String {
             alert(data.error || 'Could not load album.');
             return;
           }
-          document.getElementById('sideJson').value = JSON.stringify(data.side, null, 2);
+          activeAlbum = data.album || data.side;
+          selectedSide = 'A';
+          renderLoadedAlbum();
+          document.getElementById('sideJson').value = JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide), null, 2);
+          await saveSelectedSide();
           await tick();
         }
 
@@ -1314,10 +1457,19 @@ func pageHTML() -> String {
           const sideBox = document.getElementById('sideJson');
           if (!sideBox.value && side.tracks && side.tracks.length) {
             sideBox.value = JSON.stringify(side, null, 2);
+            activeAlbum = {
+              name: side.name || 'Loaded side',
+              artists: '',
+              image: '',
+              tracks: side.tracks || []
+            };
+            selectedSide = 'A';
+            renderLoadedAlbum();
           }
         }
 
         loadTemplate();
+        renderLoadedAlbum();
         tick();
         setInterval(tick, 1000);
       </script>
