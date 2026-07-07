@@ -21,4 +21,4 @@ The first WebSocket message is UTF-8 JSON:
 
 Subsequent binary messages are little-endian `float32` mono PCM frames.
 
-The Mac coordinator treats frames as a continuous stream and maintains a monotonic stream clock when passing buffers into ShazamKit.
+The Mac coordinator treats frames as a continuous stream and maintains a monotonic stream clock for album/side sync. The side timer starts when RMS crosses the activity threshold while the coordinator is armed.

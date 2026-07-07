@@ -12,8 +12,8 @@ Windows tray agent
 Mac coordinator
   Serves the control/status UI at http://192.168.1.3:4739
   Receives audio at ws://192.168.1.3:4739/audio
-  Runs ShazamKit
-  Controls Spotify playback on the Windows Spotify device named CUTE-GAMING
+  Tracks an album side from needle drop, elapsed time, and silence gaps
+  Later: controls Spotify playback on the Windows Spotify device named CUTE-GAMING
 ```
 
 ## Defaults
@@ -30,7 +30,7 @@ Windows config: %APPDATA%\VinylSync\config.json
 1. Mac coordinator status page and WebSocket audio receiver.
 2. Windows tray agent with input selection and PCM streaming.
 3. Mac RMS/status display for incoming audio.
-4. ShazamKit streaming match loop.
+4. Album/side timing engine with needle-drop and silence-gap detection.
 5. Spotify OAuth, device picker, and playback control.
 6. Sync policy and drift correction.
 
