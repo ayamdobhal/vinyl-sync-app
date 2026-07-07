@@ -3,6 +3,7 @@ import Foundation
 import Network
 
 struct SideTrack: Codable {
+  var position: String?
   var title: String
   var durationSeconds: Double
   var uri: String?
@@ -16,12 +17,12 @@ struct SidePlan: Codable {
   static let aThousandSunsSideA = SidePlan(
     name: "A Thousand Suns - Side A",
     tracks: [
-      SideTrack(title: "The Requiem", durationSeconds: 121, uri: nil),
-      SideTrack(title: "The Radiance", durationSeconds: 57, uri: nil),
-      SideTrack(title: "Burning in the Skies", durationSeconds: 253, uri: nil),
-      SideTrack(title: "Empty Spaces", durationSeconds: 18, uri: nil),
-      SideTrack(title: "When They Come for Me", durationSeconds: 293, uri: nil),
-      SideTrack(title: "Robot Boy", durationSeconds: 269, uri: nil)
+      SideTrack(position: "A1", title: "The Requiem", durationSeconds: 121, uri: nil),
+      SideTrack(position: "A2", title: "The Radiance", durationSeconds: 57, uri: nil),
+      SideTrack(position: "A3", title: "Burning in the Skies", durationSeconds: 253, uri: nil),
+      SideTrack(position: "A4", title: "Empty Spaces", durationSeconds: 18, uri: nil),
+      SideTrack(position: "A5", title: "When They Come for Me", durationSeconds: 293, uri: nil),
+      SideTrack(position: "A6", title: "Robot Boy", durationSeconds: 269, uri: nil)
     ]
   )
 }
@@ -148,6 +149,7 @@ final class SpotifyClient {
     let items = ((album["tracks"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
     let tracks = items.map { item in
       SideTrack(
+        position: item["track_number"].map { "\($0)" },
         title: item["name"] as? String ?? "Untitled",
         durationSeconds: Double(item["duration_ms"] as? Int ?? 0) / 1000,
         uri: item["uri"] as? String
@@ -160,7 +162,7 @@ final class SpotifyClient {
       "artists": artists,
       "image": image,
       "tracks": tracks.map {
-        ["title": $0.title, "durationSeconds": $0.durationSeconds, "uri": $0.uri ?? ""] as [String: Any]
+        ["position": $0.position ?? "", "title": $0.title, "durationSeconds": $0.durationSeconds, "uri": $0.uri ?? ""] as [String: Any]
       }
     ]
     return (sidePlan, albumPayload)
@@ -316,9 +318,174 @@ final class SpotifyClient {
   }
 }
 
+struct DiscogsStatus {
+  var configured = false
+  var user = "ayamdobhal"
+  var error = ""
+}
+
+final class DiscogsClient {
+  private let token: String
+  private let username: String
+  private let lock = NSLock()
+  private var lastError = ""
+
+  init() {
+    let env = loadEnvironment()
+    token = env["DISCOGS_TOKEN"] ?? ""
+    username = env["DISCOGS_USERNAME"] ?? "ayamdobhal"
+  }
+
+  func status() -> DiscogsStatus {
+    lock.lock()
+    let error = lastError
+    lock.unlock()
+    return DiscogsStatus(configured: !token.isEmpty, user: username, error: error)
+  }
+
+  func collection() throws -> [[String: Any]] {
+    guard !token.isEmpty else {
+      throw NSError(domain: "Discogs", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing DISCOGS_TOKEN."])
+    }
+
+    var page = 1
+    var releases: [[String: Any]] = []
+
+    while page <= 10 {
+      let json = try api("/users/\(username)/collection/folders/0/releases?per_page=100&page=\(page)&sort=artist&sort_order=asc")
+      let items = json["releases"] as? [[String: Any]] ?? []
+      releases.append(contentsOf: items.compactMap(collectionItem))
+
+      let pagination = json["pagination"] as? [String: Any]
+      let pages = pagination?["pages"] as? Int ?? page
+      if page >= pages { break }
+      page += 1
+    }
+
+    setError("")
+    return releases
+  }
+
+  func release(id: Int) throws -> [String: Any] {
+    guard !token.isEmpty else {
+      throw NSError(domain: "Discogs", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing DISCOGS_TOKEN."])
+    }
+
+    let json = try api("/releases/\(id)")
+    let title = json["title"] as? String ?? "Discogs release"
+    let artists = json["artists_sort"] as? String
+      ?? ((json["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }.joined(separator: ", ")
+    let image = ((json["images"] as? [[String: Any]]) ?? []).first?["uri"] as? String
+      ?? json["thumb"] as? String
+      ?? ""
+    let tracklist = json["tracklist"] as? [[String: Any]] ?? []
+    var sides: [String: [[String: Any]]] = [:]
+    var sideOrder: [String] = []
+
+    for item in tracklist {
+      guard (item["type_"] as? String ?? "track") == "track" else { continue }
+      let position = item["position"] as? String ?? ""
+      let side = sideKey(position)
+      guard !side.isEmpty else { continue }
+      if sides[side] == nil {
+        sides[side] = []
+        sideOrder.append(side)
+      }
+      sides[side]?.append([
+        "position": position,
+        "title": item["title"] as? String ?? "Untitled",
+        "durationSeconds": parseDuration(item["duration"] as? String ?? ""),
+        "uri": ""
+      ])
+    }
+
+    setError("")
+    return [
+      "id": id,
+      "name": title,
+      "artists": artists,
+      "image": image,
+      "sides": sides,
+      "sideOrder": sideOrder
+    ]
+  }
+
+  private func collectionItem(_ item: [String: Any]) -> [String: Any]? {
+    guard let basic = item["basic_information"] as? [String: Any] else { return nil }
+    let id = basic["id"] as? Int ?? item["id"] as? Int ?? 0
+    guard id > 0 else { return nil }
+    let artists = ((basic["artists"] as? [[String: Any]]) ?? []).compactMap { artist in
+      (artist["name"] as? String)?.replacingOccurrences(of: " \\(\\d+\\)$", with: "", options: .regularExpression)
+    }.joined(separator: ", ")
+    return [
+      "id": id,
+      "title": basic["title"] as? String ?? "Untitled",
+      "artists": artists,
+      "year": basic["year"] as? Int ?? 0,
+      "thumb": basic["thumb"] as? String ?? basic["cover_image"] as? String ?? ""
+    ]
+  }
+
+  private func api(_ path: String) throws -> [String: Any] {
+    var request = URLRequest(url: URL(string: "https://api.discogs.com\(path)")!)
+    request.httpMethod = "GET"
+    request.setValue("Discogs token=\(token)", forHTTPHeaderField: "Authorization")
+    request.setValue("VinylSync/0.1 +https://iamdobhal.dev", forHTTPHeaderField: "User-Agent")
+
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: Result<(Data, URLResponse), Error>!
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      if let error {
+        result = .failure(error)
+      } else {
+        result = .success((data ?? Data(), response ?? URLResponse()))
+      }
+      semaphore.signal()
+    }.resume()
+    semaphore.wait()
+
+    let (data, response) = try result.get()
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(status) else {
+      let text = String(data: data, encoding: .utf8) ?? "Discogs HTTP \(status)"
+      setError(text)
+      throw NSError(domain: "Discogs", code: status, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+    return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+  }
+
+  private func sideKey(_ position: String) -> String {
+    let trimmed = position.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let first = trimmed.first, first.isLetter else { return "" }
+    return String(first).uppercased()
+  }
+
+  private func parseDuration(_ duration: String) -> Double {
+    let parts = duration.split(separator: ":").compactMap { Double($0) }
+    if parts.count == 2 {
+      return parts[0] * 60 + parts[1]
+    }
+    if parts.count == 3 {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    }
+    return 0
+  }
+
+  private func setError(_ value: String) {
+    lock.lock()
+    lastError = value
+    lock.unlock()
+  }
+}
+
 func loadEnvironment() -> [String: String] {
   var values = ProcessInfo.processInfo.environment
-  for path in [".env", "../.env", "../../vinyl-shadow_archive_20260707_0232/.env"] {
+  for path in [
+    ".env",
+    "../.env",
+    "../../vinyl-shadow_archive_20260707_0232/.env",
+    "/Users/ayamdobhal/Documents/brain/agents/default/discogs-sync/.env"
+  ] {
     guard let text = try? String(contentsOfFile: path) else { continue }
     for line in text.split(separator: "\n") {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -607,6 +774,7 @@ final class CoordinatorServer {
   private let listener: NWListener
   private let state = StateStore()
   private let spotify = SpotifyClient()
+  private let discogs = DiscogsClient()
 
   init(port: UInt16) throws {
     self.port = NWEndpoint.Port(rawValue: port)!
@@ -693,6 +861,33 @@ final class CoordinatorServer {
       do {
         let query = request.query["q"] ?? ""
         respondJSON(connection: connection, status: 200, body: ["albums": try spotify.searchAlbums(query: query)])
+      } catch {
+        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
+      }
+      return
+    }
+
+    if request.method == "GET", request.path == "/discogs/collection" {
+      do {
+        respondJSON(connection: connection, status: 200, body: ["releases": try discogs.collection()])
+      } catch {
+        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
+      }
+      return
+    }
+
+    if request.method == "POST", request.path == "/discogs/load-release" {
+      do {
+        guard let json = try JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+              let id = json["id"] as? Int else {
+          respondJSON(connection: connection, status: 400, body: ["error": "Missing Discogs release id."])
+          return
+        }
+        let release = mergeReleaseWithSpotify(try discogs.release(id: id))
+        if let plan = sidePlan(from: release) {
+          state.configureSide(plan)
+        }
+        respondJSON(connection: connection, status: 200, body: ["ok": true, "release": release])
       } catch {
         respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
       }
@@ -893,7 +1088,8 @@ final class CoordinatorServer {
       "nextTrackTitle": snapshot.nextTrackTitle,
       "needleDropAt": snapshot.needleDropAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
       "event": snapshot.event,
-      "spotify": spotifyPayload()
+      "spotify": spotifyPayload(),
+      "discogs": discogsPayload()
     ]
   }
 
@@ -901,7 +1097,7 @@ final class CoordinatorServer {
     [
       "name": side.name,
       "tracks": side.tracks.map {
-        ["title": $0.title, "durationSeconds": $0.durationSeconds, "uri": $0.uri ?? ""] as [String: Any]
+        ["position": $0.position ?? "", "title": $0.title, "durationSeconds": $0.durationSeconds, "uri": $0.uri ?? ""] as [String: Any]
       }
     ]
   }
@@ -918,6 +1114,84 @@ final class CoordinatorServer {
       "lastAction": status.lastAction,
       "error": status.error
     ]
+  }
+
+  private func discogsPayload() -> [String: Any] {
+    let status = discogs.status()
+    return [
+      "configured": status.configured,
+      "user": status.user,
+      "error": status.error
+    ]
+  }
+
+  private func sidePlan(from release: [String: Any], sideKey: String? = nil) -> SidePlan? {
+    guard let sides = release["sides"] as? [String: [[String: Any]]] else { return nil }
+    let sideOrder = release["sideOrder"] as? [String] ?? sides.keys.sorted()
+    let selected = sideKey ?? sideOrder.first
+    guard let selected, let tracks = sides[selected], !tracks.isEmpty else { return nil }
+    let name = "\(release["artists"] as? String ?? "") - \(release["name"] as? String ?? "Discogs release") - Side \(selected)"
+    return SidePlan(name: name.trimmingCharacters(in: CharacterSet(charactersIn: " -")), tracks: tracks.map {
+      SideTrack(
+        position: $0["position"] as? String,
+        title: $0["title"] as? String ?? "Untitled",
+        durationSeconds: $0["durationSeconds"] as? Double ?? 0,
+        uri: $0["uri"] as? String
+      )
+    })
+  }
+
+  private func mergeReleaseWithSpotify(_ original: [String: Any]) -> [String: Any] {
+    var release = original
+    guard var sides = release["sides"] as? [String: [[String: Any]]] else { return release }
+    let query = [release["artists"] as? String, release["name"] as? String].compactMap { $0 }.joined(separator: " ")
+    guard let match = try? spotify.searchAlbums(query: query).first,
+          let id = match["id"] as? String,
+          let spotifyAlbum = try? spotify.albumForAlbum(id: id).album,
+          let spotifyTracks = spotifyAlbum["tracks"] as? [[String: Any]] else {
+      return release
+    }
+
+    var used = Set<Int>()
+    var flatIndex = 0
+    let sideOrder = release["sideOrder"] as? [String] ?? sides.keys.sorted()
+    for side in sideOrder {
+      var sideTracks = sides[side] ?? []
+      for index in sideTracks.indices {
+        let title = normalizeTitle(sideTracks[index]["title"] as? String ?? "")
+        let exactIndex = spotifyTracks.indices.first { candidate in
+          !used.contains(candidate) && normalizeTitle(spotifyTracks[candidate]["title"] as? String ?? "") == title
+        }
+        let matchedIndex = exactIndex ?? (spotifyTracks.indices.contains(flatIndex) ? flatIndex : nil)
+        if let matchedIndex {
+          used.insert(matchedIndex)
+          flatIndex = max(flatIndex, matchedIndex + 1)
+          sideTracks[index]["durationSeconds"] = spotifyTracks[matchedIndex]["durationSeconds"] as? Double ?? sideTracks[index]["durationSeconds"] ?? 0
+          sideTracks[index]["uri"] = spotifyTracks[matchedIndex]["uri"] as? String ?? ""
+        }
+      }
+      sides[side] = sideTracks
+    }
+
+    release["sides"] = sides
+    release["spotifyMatch"] = [
+      "id": id,
+      "name": spotifyAlbum["name"] as? String ?? "",
+      "artists": spotifyAlbum["artists"] as? String ?? "",
+      "image": spotifyAlbum["image"] as? String ?? ""
+    ]
+    if (release["image"] as? String ?? "").isEmpty {
+      release["image"] = spotifyAlbum["image"] as? String ?? ""
+    }
+    return release
+  }
+
+  private func normalizeTitle(_ value: String) -> String {
+    value
+      .lowercased()
+      .replacingOccurrences(of: "\\([^)]*\\)", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "\\[[^]]*\\]", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "[^a-z0-9]+", with: "", options: .regularExpression)
   }
 
   private func respondHTML(connection: NWConnection, body: String) {
@@ -1175,6 +1449,16 @@ func pageHTML() -> String {
           </div>
 
           <div class="panel">
+            <h2>Discogs Collection</h2>
+            <select id="discogsSelect"></select>
+            <div class="controls">
+              <button onclick="loadDiscogsCollection()">Refresh collection</button>
+              <button class="secondary" onclick="loadDiscogsRelease()">Load selected disc</button>
+            </div>
+            <div class="hint" id="discogsHint">Uses your Discogs collection for real side splits.</div>
+          </div>
+
+          <div class="panel">
             <h2>Album Search</h2>
             <input id="albumQuery" placeholder="Search Spotify album">
             <div class="controls">
@@ -1200,10 +1484,7 @@ func pageHTML() -> String {
               <div>
                 <div class="album-title" id="albumTitle">No album loaded</div>
                 <div class="album-meta" id="albumMeta">Search and load an album from Spotify.</div>
-                <div class="side-tabs">
-                  <button id="sideAButton" onclick="selectSide('A')">A</button>
-                  <button id="sideBButton" class="secondary" onclick="selectSide('B')">B</button>
-                </div>
+                <div class="side-tabs" id="sideTabs"></div>
               </div>
             </div>
             <div class="track-list" id="sideTracks"></div>
@@ -1227,13 +1508,24 @@ func pageHTML() -> String {
           name: 'A Thousand Suns - Side A',
           artists: 'Linkin Park',
           image: '',
+          sideOrder: ['A'],
+          sides: {
+            A: [
+              { position: 'A1', title: 'The Requiem', durationSeconds: 121, uri: '' },
+              { position: 'A2', title: 'The Radiance', durationSeconds: 57, uri: '' },
+              { position: 'A3', title: 'Burning in the Skies', durationSeconds: 253, uri: '' },
+              { position: 'A4', title: 'Empty Spaces', durationSeconds: 18, uri: '' },
+              { position: 'A5', title: 'When They Come for Me', durationSeconds: 293, uri: '' },
+              { position: 'A6', title: 'Robot Boy', durationSeconds: 269, uri: '' }
+            ]
+          },
           tracks: [
-            { title: 'The Requiem', durationSeconds: 121, uri: '' },
-            { title: 'The Radiance', durationSeconds: 57, uri: '' },
-            { title: 'Burning in the Skies', durationSeconds: 253, uri: '' },
-            { title: 'Empty Spaces', durationSeconds: 18, uri: '' },
-            { title: 'When They Come for Me', durationSeconds: 293, uri: '' },
-            { title: 'Robot Boy', durationSeconds: 269, uri: '' }
+            { position: 'A1', title: 'The Requiem', durationSeconds: 121, uri: '' },
+            { position: 'A2', title: 'The Radiance', durationSeconds: 57, uri: '' },
+            { position: 'A3', title: 'Burning in the Skies', durationSeconds: 253, uri: '' },
+            { position: 'A4', title: 'Empty Spaces', durationSeconds: 18, uri: '' },
+            { position: 'A5', title: 'When They Come for Me', durationSeconds: 293, uri: '' },
+            { position: 'A6', title: 'Robot Boy', durationSeconds: 269, uri: '' }
           ]
         };
         let activeAlbum = template;
@@ -1250,7 +1542,7 @@ func pageHTML() -> String {
           return (side.tracks || []).reduce((sum, track) => sum + Number(track.durationSeconds || 0), 0);
         }
 
-        function splitAlbumSides(album) {
+        function inferredAlbumSides(album) {
           const tracks = album.tracks || [];
           if (tracks.length <= 1) return { A: tracks, B: [] };
           const total = sideDuration(album);
@@ -1270,9 +1562,20 @@ func pageHTML() -> String {
           };
         }
 
+        function getAlbumSides(album) {
+          if (album.sides) return album.sides;
+          return inferredAlbumSides(album);
+        }
+
+        function getSideKeys(album) {
+          const sides = getAlbumSides(album);
+          const keys = album.sideOrder || Object.keys(sides).sort();
+          return keys.filter((key) => (sides[key] || []).length);
+        }
+
         function sidePlanFromAlbum(album, sideKey) {
-          const sides = splitAlbumSides(album);
-          const tracks = sideKey === 'B' ? sides.B : sides.A;
+          const sides = getAlbumSides(album);
+          const tracks = sides[sideKey] || [];
           return {
             name: `${album.artists ? album.artists + ' - ' : ''}${album.name} - Side ${sideKey}`,
             tracks
@@ -1281,8 +1584,10 @@ func pageHTML() -> String {
 
         function renderLoadedAlbum() {
           const album = activeAlbum || { name: 'No album loaded', artists: '', image: '', tracks: [] };
-          const sides = splitAlbumSides(album);
-          const tracks = selectedSide === 'B' ? sides.B : sides.A;
+          const sides = getAlbumSides(album);
+          const keys = getSideKeys(album);
+          if (!keys.includes(selectedSide) && keys.length) selectedSide = keys[0];
+          const tracks = sides[selectedSide] || [];
           document.getElementById('albumTitle').textContent = album.name || 'No album loaded';
           document.getElementById('albumMeta').textContent = [
             album.artists,
@@ -1294,11 +1599,15 @@ func pageHTML() -> String {
           cover.hidden = !album.image;
           cover.src = album.image || '';
 
-          document.getElementById('sideAButton').classList.toggle('active', selectedSide === 'A');
-          document.getElementById('sideAButton').classList.toggle('secondary', selectedSide !== 'A');
-          document.getElementById('sideBButton').classList.toggle('active', selectedSide === 'B');
-          document.getElementById('sideBButton').classList.toggle('secondary', selectedSide !== 'B');
-          document.getElementById('sideBButton').disabled = sides.B.length === 0;
+          const tabs = document.getElementById('sideTabs');
+          tabs.innerHTML = '';
+          for (const key of keys) {
+            const button = document.createElement('button');
+            button.textContent = key;
+            button.className = selectedSide === key ? 'active' : 'secondary';
+            button.onclick = () => selectSide(key);
+            tabs.append(button);
+          }
 
           const list = document.getElementById('sideTracks');
           list.innerHTML = '';
@@ -1311,7 +1620,7 @@ func pageHTML() -> String {
             row.className = 'track-item';
             const number = document.createElement('div');
             number.className = 'track-index';
-            number.textContent = String(index + 1).padStart(2, '0');
+            number.textContent = track.position || String(index + 1).padStart(2, '0');
             const title = document.createElement('div');
             title.className = 'track-title';
             title.textContent = track.title;
@@ -1418,6 +1727,55 @@ func pageHTML() -> String {
           await tick();
         }
 
+        async function loadDiscogsCollection() {
+          const select = document.getElementById('discogsSelect');
+          const hint = document.getElementById('discogsHint');
+          select.innerHTML = '';
+          hint.textContent = 'Loading Discogs collection...';
+          const response = await fetch('/discogs/collection');
+          const data = await response.json();
+          if (!response.ok) {
+            hint.textContent = data.error || 'Could not load Discogs collection.';
+            return;
+          }
+          for (const release of data.releases || []) {
+            const option = document.createElement('option');
+            option.value = release.id;
+            option.textContent = [release.artists, release.title, release.year || ''].filter(Boolean).join(' - ');
+            option.dataset.image = release.thumb || '';
+            select.append(option);
+          }
+          hint.textContent = `${(data.releases || []).length} collection releases loaded.`;
+        }
+
+        async function loadDiscogsRelease() {
+          const select = document.getElementById('discogsSelect');
+          const id = Number(select.value);
+          if (!id) return;
+          const hint = document.getElementById('discogsHint');
+          hint.textContent = 'Loading Discogs release...';
+          const response = await fetch('/discogs/load-release', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            hint.textContent = data.error || 'Could not load Discogs release.';
+            return;
+          }
+          activeAlbum = data.release;
+          selectedSide = (activeAlbum.sideOrder || Object.keys(activeAlbum.sides || {}))[0] || 'A';
+          renderLoadedAlbum();
+          document.getElementById('sideJson').value = JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide), null, 2);
+          await saveSelectedSide();
+          const match = activeAlbum.spotifyMatch;
+          hint.textContent = match && match.name
+            ? `Loaded Discogs release. Spotify match: ${match.artists ? match.artists + ' - ' : ''}${match.name}.`
+            : 'Loaded Discogs release. No Spotify match attached.';
+          await tick();
+        }
+
         async function tick() {
           const response = await fetch('/status');
           const status = await response.json();
@@ -1470,6 +1828,7 @@ func pageHTML() -> String {
 
         loadTemplate();
         renderLoadedAlbum();
+        loadDiscogsCollection();
         tick();
         setInterval(tick, 1000);
       </script>
