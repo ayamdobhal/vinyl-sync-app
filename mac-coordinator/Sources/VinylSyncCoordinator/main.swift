@@ -5,6 +5,7 @@ import Network
 struct SideTrack: Codable {
   var title: String
   var durationSeconds: Double
+  var uri: String?
 }
 
 struct SidePlan: Codable {
@@ -15,14 +16,312 @@ struct SidePlan: Codable {
   static let aThousandSunsSideA = SidePlan(
     name: "A Thousand Suns - Side A",
     tracks: [
-      SideTrack(title: "The Requiem", durationSeconds: 121),
-      SideTrack(title: "The Radiance", durationSeconds: 57),
-      SideTrack(title: "Burning in the Skies", durationSeconds: 253),
-      SideTrack(title: "Empty Spaces", durationSeconds: 18),
-      SideTrack(title: "When They Come for Me", durationSeconds: 293),
-      SideTrack(title: "Robot Boy", durationSeconds: 269)
+      SideTrack(title: "The Requiem", durationSeconds: 121, uri: nil),
+      SideTrack(title: "The Radiance", durationSeconds: 57, uri: nil),
+      SideTrack(title: "Burning in the Skies", durationSeconds: 253, uri: nil),
+      SideTrack(title: "Empty Spaces", durationSeconds: 18, uri: nil),
+      SideTrack(title: "When They Come for Me", durationSeconds: 293, uri: nil),
+      SideTrack(title: "Robot Boy", durationSeconds: 269, uri: nil)
     ]
   )
+}
+
+struct PlaybackRequest {
+  var uri: String
+  var positionMs: Int
+  var reason: String
+}
+
+struct SpotifyStatus {
+  var configured = false
+  var authenticated = false
+  var user = "--"
+  var targetDevice = "CUTE-GAMING"
+  var lastAction = "waiting"
+  var error = ""
+}
+
+final class SpotifyClient {
+  private struct Token: Codable {
+    var accessToken: String
+    var refreshToken: String
+    var expiresAt: Date
+  }
+
+  private let clientId: String
+  private let clientSecret: String
+  private let redirectUri: String
+  private let targetDeviceName = "CUTE-GAMING"
+  private let tokenURL = URL(fileURLWithPath: ".state/spotify-token.json")
+  private let lock = NSLock()
+  private var token: Token?
+  private var user = "--"
+  private var lastAction = "waiting"
+  private var lastError = ""
+
+  init() {
+    let env = loadEnvironment()
+    clientId = env["SPOTIFY_CLIENT_ID"] ?? ""
+    clientSecret = env["SPOTIFY_CLIENT_SECRET"] ?? ""
+    redirectUri = env["VINYL_SYNC_SPOTIFY_REDIRECT_URI"] ?? "http://192.168.1.3:4739/callback"
+    token = Self.loadToken(from: tokenURL)
+    if token != nil {
+      _ = refreshIfNeeded()
+      loadProfile()
+    }
+  }
+
+  var isConfigured: Bool {
+    !clientId.isEmpty && !clientSecret.isEmpty
+  }
+
+  func status() -> SpotifyStatus {
+    lock.lock()
+    let copy = SpotifyStatus(
+      configured: isConfigured,
+      authenticated: token != nil,
+      user: user,
+      targetDevice: targetDeviceName,
+      lastAction: lastAction,
+      error: lastError
+    )
+    lock.unlock()
+    return copy
+  }
+
+  func loginURL() -> URL? {
+    guard isConfigured else { return nil }
+    var components = URLComponents(string: "https://accounts.spotify.com/authorize")!
+    components.queryItems = [
+      URLQueryItem(name: "client_id", value: clientId),
+      URLQueryItem(name: "response_type", value: "code"),
+      URLQueryItem(name: "redirect_uri", value: redirectUri),
+      URLQueryItem(name: "scope", value: "user-read-playback-state user-modify-playback-state user-read-currently-playing")
+    ]
+    return components.url
+  }
+
+  func handleCallback(code: String) throws {
+    let body = formEncoded([
+      "grant_type": "authorization_code",
+      "code": code,
+      "redirect_uri": redirectUri
+    ])
+    let data = try tokenRequest(body: body)
+    let accessToken = data["access_token"] as? String ?? ""
+    let refreshToken = data["refresh_token"] as? String ?? ""
+    let expiresIn = data["expires_in"] as? Double ?? 3600
+    guard !accessToken.isEmpty, !refreshToken.isEmpty else {
+      throw NSError(domain: "Spotify", code: 1, userInfo: [NSLocalizedDescriptionKey: "Spotify did not return tokens."])
+    }
+    save(Token(accessToken: accessToken, refreshToken: refreshToken, expiresAt: Date().addingTimeInterval(expiresIn - 60)))
+    loadProfile()
+  }
+
+  func searchAlbums(query: String) throws -> [[String: Any]] {
+    let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+    let json = try api("GET", "/search?q=\(encoded)&type=album&limit=8")
+    let albums = ((json["albums"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+    return albums.map { album in
+      [
+        "id": album["id"] as? String ?? "",
+        "name": album["name"] as? String ?? "",
+        "artists": ((album["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }.joined(separator: ", "),
+        "image": (((album["images"] as? [[String: Any]]) ?? []).first?["url"] as? String) ?? "",
+        "releaseDate": album["release_date"] as? String ?? ""
+      ]
+    }
+  }
+
+  func sidePlanForAlbum(id: String) throws -> SidePlan {
+    let album = try api("GET", "/albums/\(id)")
+    let name = album["name"] as? String ?? "Spotify album"
+    let artists = ((album["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }.joined(separator: ", ")
+    let items = ((album["tracks"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+    let tracks = items.map { item in
+      SideTrack(
+        title: item["name"] as? String ?? "Untitled",
+        durationSeconds: Double(item["duration_ms"] as? Int ?? 0) / 1000,
+        uri: item["uri"] as? String
+      )
+    }
+    return SidePlan(name: artists.isEmpty ? name : "\(artists) - \(name)", tracks: tracks)
+  }
+
+  func play(uri: String, positionMs: Int, reason: String) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        let deviceId = try self.targetDeviceId()
+        _ = try self.api("PUT", "/me/player/volume?volume_percent=0&device_id=\(deviceId)", emptyOK: true)
+        let body = try JSONSerialization.data(withJSONObject: [
+          "uris": [uri],
+          "position_ms": max(0, positionMs)
+        ])
+        _ = try self.api("PUT", "/me/player/play?device_id=\(deviceId)", body: body, emptyOK: true)
+        self.setAction("playing \(reason)", error: "")
+      } catch {
+        self.setAction("play failed", error: error.localizedDescription)
+      }
+    }
+  }
+
+  private func targetDeviceId() throws -> String {
+    let json = try api("GET", "/me/player/devices")
+    let devices = json["devices"] as? [[String: Any]] ?? []
+    if let exact = devices.first(where: { ($0["name"] as? String) == targetDeviceName }),
+       let id = exact["id"] as? String {
+      return id
+    }
+    if let active = devices.first(where: { ($0["is_active"] as? Bool) == true }),
+       let id = active["id"] as? String {
+      return id
+    }
+    throw NSError(domain: "Spotify", code: 2, userInfo: [NSLocalizedDescriptionKey: "Spotify device \(targetDeviceName) not found. Keep Spotify Desktop open on the PC."])
+  }
+
+  private func loadProfile() {
+    do {
+      let me = try api("GET", "/me")
+      lock.lock()
+      user = me["display_name"] as? String ?? me["id"] as? String ?? "--"
+      lastError = ""
+      lock.unlock()
+    } catch {
+      setAction("profile failed", error: error.localizedDescription)
+    }
+  }
+
+  private func refreshIfNeeded() -> Bool {
+    lock.lock()
+    let current = token
+    lock.unlock()
+    guard let current else { return false }
+    guard current.expiresAt <= Date() else { return true }
+
+    do {
+      let body = formEncoded([
+        "grant_type": "refresh_token",
+        "refresh_token": current.refreshToken
+      ])
+      let data = try tokenRequest(body: body)
+      let accessToken = data["access_token"] as? String ?? ""
+      let refreshToken = data["refresh_token"] as? String ?? current.refreshToken
+      let expiresIn = data["expires_in"] as? Double ?? 3600
+      guard !accessToken.isEmpty else { return false }
+      save(Token(accessToken: accessToken, refreshToken: refreshToken, expiresAt: Date().addingTimeInterval(expiresIn - 60)))
+      return true
+    } catch {
+      setAction("refresh failed", error: error.localizedDescription)
+      return false
+    }
+  }
+
+  private func api(_ method: String, _ path: String, body: Data? = nil, emptyOK: Bool = false) throws -> [String: Any] {
+    guard refreshIfNeeded() else {
+      throw NSError(domain: "Spotify", code: 3, userInfo: [NSLocalizedDescriptionKey: "Spotify is not connected."])
+    }
+    lock.lock()
+    let accessToken = token?.accessToken ?? ""
+    lock.unlock()
+
+    var request = URLRequest(url: URL(string: "https://api.spotify.com/v1\(path)")!)
+    request.httpMethod = method
+    request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+    if let body {
+      request.httpBody = body
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    }
+
+    let (data, response) = try send(request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(status) else {
+      let text = String(data: data, encoding: .utf8) ?? "Spotify HTTP \(status)"
+      throw NSError(domain: "Spotify", code: status, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+    if data.isEmpty || emptyOK { return [:] }
+    return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+  }
+
+  private func tokenRequest(body: Data) throws -> [String: Any] {
+    var request = URLRequest(url: URL(string: "https://accounts.spotify.com/api/token")!)
+    request.httpMethod = "POST"
+    request.httpBody = body
+    request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+    let basic = Data("\(clientId):\(clientSecret)".utf8).base64EncodedString()
+    request.setValue("Basic \(basic)", forHTTPHeaderField: "Authorization")
+
+    let (data, response) = try send(request)
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+    guard (200..<300).contains(status) else {
+      let text = String(data: data, encoding: .utf8) ?? "Spotify token HTTP \(status)"
+      throw NSError(domain: "Spotify", code: status, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+    return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+  }
+
+  private func send(_ request: URLRequest) throws -> (Data, URLResponse) {
+    let semaphore = DispatchSemaphore(value: 0)
+    var result: Result<(Data, URLResponse), Error>!
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      if let error {
+        result = .failure(error)
+      } else {
+        result = .success((data ?? Data(), response ?? URLResponse()))
+      }
+      semaphore.signal()
+    }.resume()
+    semaphore.wait()
+    return try result.get()
+  }
+
+  private func save(_ newToken: Token) {
+    lock.lock()
+    token = newToken
+    lock.unlock()
+    try? FileManager.default.createDirectory(at: tokenURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    if let data = try? JSONEncoder().encode(newToken) {
+      try? data.write(to: tokenURL)
+    }
+  }
+
+  private func setAction(_ action: String, error: String) {
+    lock.lock()
+    lastAction = action
+    lastError = error
+    lock.unlock()
+  }
+
+  private static func loadToken(from url: URL) -> Token? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONDecoder().decode(Token.self, from: data)
+  }
+}
+
+func loadEnvironment() -> [String: String] {
+  var values = ProcessInfo.processInfo.environment
+  for path in [".env", "../.env", "../../vinyl-shadow_archive_20260707_0232/.env"] {
+    guard let text = try? String(contentsOfFile: path) else { continue }
+    for line in text.split(separator: "\n") {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
+            let equals = trimmed.firstIndex(of: "=") else { continue }
+      let key = String(trimmed[..<equals])
+      let value = String(trimmed[trimmed.index(after: equals)...])
+        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+      values[key] = values[key] ?? value
+    }
+  }
+  return values
+}
+
+func formEncoded(_ values: [String: String]) -> Data {
+  let body = values.map { key, value in
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    let encodedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+    let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    return "\(encodedKey)=\(encodedValue)"
+  }.joined(separator: "&")
+  return Data(body.utf8)
 }
 
 struct SyncSnapshot {
@@ -46,6 +345,7 @@ struct SyncSnapshot {
   var nextTrackTitle = "--"
   var needleDropAt: Date?
   var event = "waiting"
+  var playedTrackIndex: Int?
 }
 
 final class StateStore {
@@ -78,6 +378,7 @@ final class StateStore {
     snapshot.currentTrackTitle = firstTrackTitleLocked()
     snapshot.nextTrackTitle = nextTrackTitleLocked(after: 0)
     snapshot.needleDropAt = nil
+    snapshot.playedTrackIndex = nil
     snapshot.silenceSeconds = 0
     snapshot.audioActive = false
     snapshot.event = "armed"
@@ -90,12 +391,12 @@ final class StateStore {
     lock.unlock()
   }
 
-  func nextTrack() {
+  func nextTrack() -> PlaybackRequest? {
     lock.lock()
     guard !snapshot.sidePlan.tracks.isEmpty else {
       snapshot.event = "no side loaded"
       lock.unlock()
-      return
+      return nil
     }
 
     let nextIndex = min(snapshot.currentTrackIndex + 1, snapshot.sidePlan.tracks.count - 1)
@@ -108,7 +409,9 @@ final class StateStore {
     snapshot.silenceSeconds = 0
     snapshot.mode = "running"
     snapshot.event = "manual next"
+    let request = playbackRequestLocked(reason: "manual next")
     lock.unlock()
+    return request
   }
 
   func disconnectAudio() {
@@ -128,8 +431,9 @@ final class StateStore {
     lock.unlock()
   }
 
-  func receiveAudio(sampleCount: Int, rms: Float) {
+  func receiveAudio(sampleCount: Int, rms: Float) -> PlaybackRequest? {
     lock.lock()
+    var request: PlaybackRequest?
     let delta = snapshot.sampleRate > 0 ? Double(sampleCount) / Double(snapshot.sampleRate) : 0
     snapshot.frameCount += 1
     snapshot.streamSeconds += delta
@@ -150,6 +454,7 @@ final class StateStore {
         snapshot.audioActive = true
         snapshot.needleDropAt = Date()
         snapshot.event = "needle drop"
+        request = playbackRequestLocked(reason: "needle drop")
       }
     case "running":
       snapshot.sideElapsedSeconds += delta
@@ -157,18 +462,24 @@ final class StateStore {
       let wasActive = snapshot.audioActive
       snapshot.audioActive = activeNow || (snapshot.silenceSeconds < transitionSilenceSeconds)
 
+      let previousIndex = snapshot.currentTrackIndex
       updateTrackFromTimelineLocked()
+      if snapshot.currentTrackIndex != previousIndex {
+        request = playbackRequestLocked(reason: "timeline")
+      }
 
       if wasActive,
          snapshot.silenceSeconds >= transitionSilenceSeconds,
          shouldSnapToNextTrackLocked() {
         snapToNextTrackLocked(event: "silence gap")
+        request = playbackRequestLocked(reason: "silence gap")
       }
     default:
       snapshot.audioActive = activeNow
     }
 
     lock.unlock()
+    return request
   }
 
   func currentSnapshot() -> SyncSnapshot {
@@ -189,6 +500,7 @@ final class StateStore {
     snapshot.currentTrackTitle = firstTrackTitleLocked()
     snapshot.nextTrackTitle = nextTrackTitleLocked(after: 0)
     snapshot.needleDropAt = nil
+    snapshot.playedTrackIndex = nil
     snapshot.event = event
   }
 
@@ -254,12 +566,28 @@ final class StateStore {
     snapshot.silenceSeconds = 0
     snapshot.event = event
   }
+
+  private func playbackRequestLocked(reason: String) -> PlaybackRequest? {
+    guard snapshot.sidePlan.tracks.indices.contains(snapshot.currentTrackIndex),
+          snapshot.playedTrackIndex != snapshot.currentTrackIndex,
+          let uri = snapshot.sidePlan.tracks[snapshot.currentTrackIndex].uri,
+          !uri.isEmpty else {
+      return nil
+    }
+    snapshot.playedTrackIndex = snapshot.currentTrackIndex
+    return PlaybackRequest(
+      uri: uri,
+      positionMs: Int(max(0, snapshot.currentTrackElapsedSeconds) * 1000),
+      reason: reason
+    )
+  }
 }
 
 final class CoordinatorServer {
   private let port: NWEndpoint.Port
   private let listener: NWListener
   private let state = StateStore()
+  private let spotify = SpotifyClient()
 
   init(port: UInt16) throws {
     self.port = NWEndpoint.Port(rawValue: port)!
@@ -319,6 +647,55 @@ final class CoordinatorServer {
       return
     }
 
+    if request.method == "GET", request.path == "/spotify/login" {
+      guard let url = spotify.loginURL() else {
+        respondJSON(connection: connection, status: 400, body: ["error": "Missing Spotify config."])
+        return
+      }
+      respondRedirect(connection: connection, url: url.absoluteString)
+      return
+    }
+
+    if request.method == "GET", request.path == "/callback" {
+      guard let code = request.query["code"] else {
+        respondHTML(connection: connection, body: "<p>Missing Spotify callback code.</p>")
+        return
+      }
+      do {
+        try spotify.handleCallback(code: code)
+        respondHTML(connection: connection, body: "<p>Spotify connected. You can close this tab or go back to <a href=\"/\">Vinyl Sync</a>.</p>")
+      } catch {
+        respondHTML(connection: connection, body: "<p>Spotify connection failed: \(escapeHTML(error.localizedDescription))</p>")
+      }
+      return
+    }
+
+    if request.method == "GET", request.path == "/spotify/search" {
+      do {
+        let query = request.query["q"] ?? ""
+        respondJSON(connection: connection, status: 200, body: ["albums": try spotify.searchAlbums(query: query)])
+      } catch {
+        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
+      }
+      return
+    }
+
+    if request.method == "POST", request.path == "/spotify/load-album" {
+      do {
+        guard let json = try JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+              let id = json["id"] as? String else {
+          respondJSON(connection: connection, status: 400, body: ["error": "Missing album id."])
+          return
+        }
+        let plan = try spotify.sidePlanForAlbum(id: id)
+        state.configureSide(plan)
+        respondJSON(connection: connection, status: 200, body: ["ok": true, "side": sidePayload(plan)])
+      } catch {
+        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
+      }
+      return
+    }
+
     if request.method == "GET", request.path == "/side" {
       let snapshot = state.currentSnapshot()
       respondJSON(connection: connection, status: 200, body: sidePayload(snapshot.sidePlan))
@@ -343,8 +720,22 @@ final class CoordinatorServer {
     }
 
     if request.method == "POST", request.path == "/sync/next" {
-      state.nextTrack()
+      if let request = state.nextTrack() {
+        spotify.play(uri: request.uri, positionMs: request.positionMs, reason: request.reason)
+      }
       respondJSON(connection: connection, status: 200, body: ["ok": true])
+      return
+    }
+
+    if request.method == "POST", request.path == "/spotify/play-current" {
+      let snapshot = state.currentSnapshot()
+      if snapshot.sidePlan.tracks.indices.contains(snapshot.currentTrackIndex),
+         let uri = snapshot.sidePlan.tracks[snapshot.currentTrackIndex].uri {
+        spotify.play(uri: uri, positionMs: Int(max(0, snapshot.currentTrackElapsedSeconds) * 1000), reason: "manual")
+        respondJSON(connection: connection, status: 200, body: ["ok": true])
+      } else {
+        respondJSON(connection: connection, status: 400, body: ["error": "Current track has no Spotify URI. Load the side from Spotify search first."])
+      }
       return
     }
 
@@ -453,7 +844,9 @@ final class CoordinatorServer {
     }
 
     let rms = sampleCount == 0 ? 0 : sqrt(sum / Float(sampleCount))
-    state.receiveAudio(sampleCount: sampleCount, rms: rms)
+    if let request = state.receiveAudio(sampleCount: sampleCount, rms: rms) {
+      spotify.play(uri: request.uri, positionMs: request.positionMs, reason: request.reason)
+    }
   }
 
   private func statusPayload(_ snapshot: SyncSnapshot) -> [String: Any] {
@@ -476,7 +869,8 @@ final class CoordinatorServer {
       "currentTrackTitle": snapshot.currentTrackTitle,
       "nextTrackTitle": snapshot.nextTrackTitle,
       "needleDropAt": snapshot.needleDropAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
-      "event": snapshot.event
+      "event": snapshot.event,
+      "spotify": spotifyPayload()
     ]
   }
 
@@ -484,8 +878,20 @@ final class CoordinatorServer {
     [
       "name": side.name,
       "tracks": side.tracks.map {
-        ["title": $0.title, "durationSeconds": $0.durationSeconds] as [String: Any]
+        ["title": $0.title, "durationSeconds": $0.durationSeconds, "uri": $0.uri ?? ""] as [String: Any]
       }
+    ]
+  }
+
+  private func spotifyPayload() -> [String: Any] {
+    let status = spotify.status()
+    return [
+      "configured": status.configured,
+      "authenticated": status.authenticated,
+      "user": status.user,
+      "targetDevice": status.targetDevice,
+      "lastAction": status.lastAction,
+      "error": status.error
     ]
   }
 
@@ -496,6 +902,14 @@ final class CoordinatorServer {
   private func respondJSON(connection: NWConnection, status: Int, body: [String: Any]) {
     let data = try! JSONSerialization.data(withJSONObject: body)
     respond(connection: connection, status: status, contentType: "application/json", body: data)
+  }
+
+  private func respondRedirect(connection: NWConnection, url: String) {
+    var headers = "HTTP/1.1 302 Found\r\n"
+    headers += "Location: \(url)\r\n"
+    headers += "Content-Length: 0\r\n"
+    headers += "Connection: close\r\n\r\n"
+    connection.send(content: Data(headers.utf8), completion: .contentProcessed { _ in connection.cancel() })
   }
 
   private func respond(connection: NWConnection, status: Int, contentType: String, body: Data) {
@@ -513,6 +927,7 @@ final class CoordinatorServer {
 struct HTTPRequest {
   let method: String
   let path: String
+  let query: [String: String]
   let headers: [String: String]
   let body: Data
 
@@ -529,7 +944,14 @@ struct HTTPRequest {
     guard requestParts.count >= 2 else { return nil }
 
     method = String(requestParts[0])
-    path = String(requestParts[1])
+    let rawPath = String(requestParts[1])
+    if let question = rawPath.firstIndex(of: "?") {
+      path = String(rawPath[..<question])
+      query = parseQuery(String(rawPath[rawPath.index(after: question)...]))
+    } else {
+      path = rawPath
+      query = [:]
+    }
     headers = Dictionary(uniqueKeysWithValues: lines.dropFirst().compactMap { line in
       let parts = line.split(separator: ":", maxSplits: 1)
       guard parts.count == 2 else { return nil }
@@ -598,6 +1020,27 @@ func webSocketAccept(_ key: String) -> String {
   return Data(digest).base64EncodedString()
 }
 
+func parseQuery(_ query: String) -> [String: String] {
+  var values: [String: String] = [:]
+  for part in query.split(separator: "&") {
+    let pieces = part.split(separator: "=", maxSplits: 1)
+    guard let key = pieces.first else { continue }
+    let value = pieces.count > 1 ? String(pieces[1]) : ""
+    values[String(key).removingPercentEncoding ?? String(key)] = value
+      .replacingOccurrences(of: "+", with: " ")
+      .removingPercentEncoding ?? value
+  }
+  return values
+}
+
+func escapeHTML(_ value: String) -> String {
+  value
+    .replacingOccurrences(of: "&", with: "&amp;")
+    .replacingOccurrences(of: "<", with: "&lt;")
+    .replacingOccurrences(of: ">", with: "&gt;")
+    .replacingOccurrences(of: "\"", with: "&quot;")
+}
+
 func pageHTML() -> String {
   """
   <!doctype html>
@@ -624,10 +1067,16 @@ func pageHTML() -> String {
         .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
         button { border: 1px solid #1f2328; background: #1f2328; color: white; border-radius: 6px; padding: 9px 12px; font: inherit; cursor: pointer; }
         button.secondary { background: transparent; color: #1f2328; }
+        input { width: 100%; border: 1px solid #d8cdc0; border-radius: 6px; padding: 10px; font: inherit; background: #fff; color: #1f2328; }
         textarea { width: 100%; min-height: 220px; resize: vertical; border: 1px solid #d8cdc0; border-radius: 6px; padding: 10px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: #fff; color: #1f2328; }
         .timeline { margin-top: 12px; height: 16px; border-radius: 999px; overflow: hidden; background: #e3d7ca; }
         .progress { height: 100%; width: 0%; background: #8d3f2f; transition: width 160ms linear; }
         .hint { color: #6b6258; font-size: 13px; margin-top: 8px; }
+        .results { display: grid; gap: 8px; margin-top: 12px; }
+        .result { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid #eee2d6; border-radius: 8px; padding: 8px; background: #fff; }
+        .result img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: #e3d7ca; }
+        .result-title { font-weight: 700; overflow-wrap: anywhere; }
+        .result-meta { color: #6b6258; font-size: 12px; }
         @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } body { padding: 14px; } }
       </style>
     </head>
@@ -656,8 +1105,30 @@ func pageHTML() -> String {
             <div class="controls">
               <button onclick="post('/sync/arm')">Arm</button>
               <button class="secondary" onclick="post('/sync/next')">Next track</button>
+              <button class="secondary" onclick="post('/spotify/play-current')">Play current muted</button>
               <button class="secondary" onclick="post('/sync/reset')">Reset</button>
             </div>
+          </div>
+
+          <div class="panel">
+            <h2>Spotify</h2>
+            <div class="row"><span class="label">Auth</span><span class="value" id="spotifyAuth">--</span></div>
+            <div class="row"><span class="label">User</span><span class="value" id="spotifyUser">--</span></div>
+            <div class="row"><span class="label">Target</span><span class="value" id="spotifyTarget">--</span></div>
+            <div class="row"><span class="label">Action</span><span class="value" id="spotifyAction">--</span></div>
+            <div class="row"><span class="label">Error</span><span class="value" id="spotifyError">--</span></div>
+            <div class="controls">
+              <button onclick="window.location.href='/spotify/login'">Connect Spotify</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h2>Album Search</h2>
+            <input id="albumQuery" placeholder="Search Spotify album">
+            <div class="controls">
+              <button onclick="searchAlbums()">Search</button>
+            </div>
+            <div class="results" id="albumResults"></div>
           </div>
 
           <div class="panel">
@@ -685,12 +1156,12 @@ func pageHTML() -> String {
         const template = {
           name: 'A Thousand Suns - Side A',
           tracks: [
-            { title: 'The Requiem', durationSeconds: 121 },
-            { title: 'The Radiance', durationSeconds: 57 },
-            { title: 'Burning in the Skies', durationSeconds: 253 },
-            { title: 'Empty Spaces', durationSeconds: 18 },
-            { title: 'When They Come for Me', durationSeconds: 293 },
-            { title: 'Robot Boy', durationSeconds: 269 }
+            { title: 'The Requiem', durationSeconds: 121, uri: '' },
+            { title: 'The Radiance', durationSeconds: 57, uri: '' },
+            { title: 'Burning in the Skies', durationSeconds: 253, uri: '' },
+            { title: 'Empty Spaces', durationSeconds: 18, uri: '' },
+            { title: 'When They Come for Me', durationSeconds: 293, uri: '' },
+            { title: 'Robot Boy', durationSeconds: 269, uri: '' }
           ]
         };
 
@@ -706,7 +1177,11 @@ func pageHTML() -> String {
         }
 
         async function post(path) {
-          await fetch(path, { method: 'POST' });
+          const response = await fetch(path, { method: 'POST' });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({ error: 'Request failed.' }));
+            alert(data.error || 'Request failed.');
+          }
           await tick();
         }
 
@@ -726,6 +1201,55 @@ func pageHTML() -> String {
 
         function loadTemplate() {
           document.getElementById('sideJson').value = JSON.stringify(template, null, 2);
+        }
+
+        async function searchAlbums() {
+          const query = document.getElementById('albumQuery').value.trim();
+          if (!query) return;
+          const results = document.getElementById('albumResults');
+          results.textContent = 'Searching...';
+          const response = await fetch('/spotify/search?q=' + encodeURIComponent(query));
+          const data = await response.json();
+          if (!response.ok) {
+            results.textContent = data.error || 'Search failed.';
+            return;
+          }
+          results.innerHTML = '';
+          for (const album of data.albums || []) {
+            const row = document.createElement('div');
+            row.className = 'result';
+            const image = document.createElement('img');
+            image.src = album.image || '';
+            const text = document.createElement('div');
+            const title = document.createElement('div');
+            title.className = 'result-title';
+            title.textContent = album.name;
+            const meta = document.createElement('div');
+            meta.className = 'result-meta';
+            meta.textContent = [album.artists, album.releaseDate].filter(Boolean).join(' / ');
+            text.append(title, meta);
+            const button = document.createElement('button');
+            button.className = 'secondary';
+            button.textContent = 'Load';
+            button.onclick = () => loadAlbum(album.id);
+            row.append(image, text, button);
+            results.append(row);
+          }
+        }
+
+        async function loadAlbum(id) {
+          const response = await fetch('/spotify/load-album', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            alert(data.error || 'Could not load album.');
+            return;
+          }
+          document.getElementById('sideJson').value = JSON.stringify(data.side, null, 2);
+          await tick();
         }
 
         async function tick() {
@@ -750,6 +1274,12 @@ func pageHTML() -> String {
           document.getElementById('trackRemaining').textContent = fmt(status.currentTrackRemainingSeconds);
           document.getElementById('nextTrack').textContent = status.nextTrackTitle || '--';
           document.getElementById('progress').style.width = Math.min(100, (status.sideElapsedSeconds / Math.max(1, sideDuration(side))) * 100) + '%';
+          const spotify = status.spotify || {};
+          document.getElementById('spotifyAuth').textContent = spotify.configured ? (spotify.authenticated ? 'connected' : 'not connected') : 'missing config';
+          document.getElementById('spotifyUser').textContent = spotify.user || '--';
+          document.getElementById('spotifyTarget').textContent = spotify.targetDevice || '--';
+          document.getElementById('spotifyAction').textContent = spotify.lastAction || '--';
+          document.getElementById('spotifyError').textContent = spotify.error || '--';
 
           const sideBox = document.getElementById('sideJson');
           if (!sideBox.value && side.tracks && side.tracks.length) {

@@ -13,7 +13,7 @@ Mac coordinator
   Serves the control/status UI at http://192.168.1.3:4739
   Receives audio at ws://192.168.1.3:4739/audio
   Tracks an album side from needle drop, elapsed time, and silence gaps
-  Later: controls Spotify playback on the Windows Spotify device named CUTE-GAMING
+  Searches Spotify albums and controls playback on the Windows Spotify device named CUTE-GAMING
 ```
 
 ## Defaults
@@ -22,6 +22,7 @@ Mac coordinator
 Mac host: 192.168.1.3
 Mac port: 4739
 Spotify target device: CUTE-GAMING
+Spotify redirect URI: http://192.168.1.3:4739/callback
 Windows config: %APPDATA%\VinylSync\config.json
 ```
 
@@ -31,7 +32,7 @@ Windows config: %APPDATA%\VinylSync\config.json
 2. Windows tray agent with input selection and PCM streaming.
 3. Mac RMS/status display for incoming audio.
 4. Album/side timing engine with needle-drop and silence-gap detection.
-5. Spotify OAuth, device picker, and playback control.
+5. Spotify OAuth, album search, and playback control.
 6. Sync policy and drift correction.
 
 ## Mac Coordinator
@@ -46,6 +47,14 @@ Open from the PC:
 
 ```text
 http://192.168.1.3:4739
+```
+
+Spotify credentials are read from environment variables or an ignored `.env` file:
+
+```text
+SPOTIFY_CLIENT_ID=...
+SPOTIFY_CLIENT_SECRET=...
+VINYL_SYNC_SPOTIFY_REDIRECT_URI=http://192.168.1.3:4739/callback
 ```
 
 ## Windows Agent
