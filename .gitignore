@@ -1,5 +1,7 @@
 .DS_Store
 .env
+.state/
+mac-coordinator/.state/
 .build/
 bin/
 obj/

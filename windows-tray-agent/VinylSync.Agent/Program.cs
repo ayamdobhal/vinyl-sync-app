@@ -37,6 +37,11 @@ internal sealed class TrayApp : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusMenu);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Reconnect", null, async (_, _) =>
+        {
+            await RunTrayAction(RestartStreaming);
+        });
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_deviceMenu);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, async (_, _) =>
@@ -123,6 +128,7 @@ internal sealed class TrayApp : IDisposable
 
     private async Task RestartStreaming()
     {
+        SetStatus("Reconnecting");
         await StopStreaming();
         await StartStreaming();
     }
