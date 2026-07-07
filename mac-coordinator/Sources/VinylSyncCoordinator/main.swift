@@ -63,7 +63,7 @@ final class SpotifyClient {
     let env = loadEnvironment()
     clientId = env["SPOTIFY_CLIENT_ID"] ?? ""
     clientSecret = env["SPOTIFY_CLIENT_SECRET"] ?? ""
-    redirectUri = env["VINYL_SYNC_SPOTIFY_REDIRECT_URI"] ?? "http://192.168.1.3:4739/callback"
+    redirectUri = env["VINYL_SYNC_SPOTIFY_REDIRECT_URI"] ?? "http://127.0.0.1:4739/callback"
     token = Self.loadToken(from: tokenURL)
     if token != nil {
       _ = refreshIfNeeded()
@@ -73,6 +73,10 @@ final class SpotifyClient {
 
   var isConfigured: Bool {
     !clientId.isEmpty && !clientSecret.isEmpty
+  }
+
+  var redirectUriValue: String {
+    redirectUri
   }
 
   func status() -> SpotifyStatus {
@@ -890,6 +894,7 @@ final class CoordinatorServer {
       "authenticated": status.authenticated,
       "user": status.user,
       "targetDevice": status.targetDevice,
+      "redirectUri": spotify.redirectUriValue,
       "lastAction": status.lastAction,
       "error": status.error
     ]
@@ -1115,11 +1120,13 @@ func pageHTML() -> String {
             <div class="row"><span class="label">Auth</span><span class="value" id="spotifyAuth">--</span></div>
             <div class="row"><span class="label">User</span><span class="value" id="spotifyUser">--</span></div>
             <div class="row"><span class="label">Target</span><span class="value" id="spotifyTarget">--</span></div>
+            <div class="row"><span class="label">Redirect</span><span class="value" id="spotifyRedirect">--</span></div>
             <div class="row"><span class="label">Action</span><span class="value" id="spotifyAction">--</span></div>
             <div class="row"><span class="label">Error</span><span class="value" id="spotifyError">--</span></div>
             <div class="controls">
-              <button onclick="window.location.href='/spotify/login'">Connect Spotify</button>
+              <button onclick="window.location.href='/spotify/login'">Connect Spotify on Mac</button>
             </div>
+            <div class="hint">Open this page from the Mac at 127.0.0.1 for Spotify OAuth. PC control works after auth.</div>
           </div>
 
           <div class="panel">
@@ -1278,6 +1285,7 @@ func pageHTML() -> String {
           document.getElementById('spotifyAuth').textContent = spotify.configured ? (spotify.authenticated ? 'connected' : 'not connected') : 'missing config';
           document.getElementById('spotifyUser').textContent = spotify.user || '--';
           document.getElementById('spotifyTarget').textContent = spotify.targetDevice || '--';
+          document.getElementById('spotifyRedirect').textContent = spotify.redirectUri || '--';
           document.getElementById('spotifyAction').textContent = spotify.lastAction || '--';
           document.getElementById('spotifyError').textContent = spotify.error || '--';
 

@@ -22,7 +22,7 @@ Mac coordinator
 Mac host: 192.168.1.3
 Mac port: 4739
 Spotify target device: CUTE-GAMING
-Spotify redirect URI: http://192.168.1.3:4739/callback
+Spotify redirect URI: http://127.0.0.1:4739/callback
 Windows config: %APPDATA%\VinylSync\config.json
 ```
 
@@ -54,8 +54,16 @@ Spotify credentials are read from environment variables or an ignored `.env` fil
 ```text
 SPOTIFY_CLIENT_ID=...
 SPOTIFY_CLIENT_SECRET=...
-VINYL_SYNC_SPOTIFY_REDIRECT_URI=http://192.168.1.3:4739/callback
+VINYL_SYNC_SPOTIFY_REDIRECT_URI=http://127.0.0.1:4739/callback
 ```
+
+Spotify rejects plain LAN HTTP callback URLs. Complete OAuth from a browser on the Mac at:
+
+```text
+http://127.0.0.1:4739
+```
+
+After that, the PC can use the coordinator UI at `http://192.168.1.3:4739`.
 
 ## Windows Agent
 
