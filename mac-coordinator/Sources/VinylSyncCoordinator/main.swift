@@ -36,6 +36,7 @@ struct SpotifyStatus {
   var configured = false
   var authenticated = false
   var user = "--"
+  var image = ""
   var targetDevice = "CUTE-GAMING"
   var lastAction = "waiting"
   var error = ""
@@ -56,6 +57,7 @@ final class SpotifyClient {
   private let lock = NSLock()
   private var token: Token?
   private var user = "--"
+  private var image = ""
   private var lastAction = "waiting"
   private var lastError = ""
 
@@ -85,6 +87,7 @@ final class SpotifyClient {
       configured: isConfigured,
       authenticated: token != nil,
       user: user,
+      image: image,
       targetDevice: targetDeviceName,
       lastAction: lastAction,
       error: lastError
@@ -188,6 +191,7 @@ final class SpotifyClient {
       let me = try api("GET", "/me")
       lock.lock()
       user = me["display_name"] as? String ?? me["id"] as? String ?? "--"
+      image = ((me["images"] as? [[String: Any]]) ?? []).first?["url"] as? String ?? ""
       lastError = ""
       lock.unlock()
     } catch {
@@ -893,6 +897,7 @@ final class CoordinatorServer {
       "configured": status.configured,
       "authenticated": status.authenticated,
       "user": status.user,
+      "image": status.image,
       "targetDevice": status.targetDevice,
       "redirectUri": spotify.redirectUriValue,
       "lastAction": status.lastAction,
@@ -1082,6 +1087,10 @@ func pageHTML() -> String {
         .result img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: #e3d7ca; }
         .result-title { font-weight: 700; overflow-wrap: anywhere; }
         .result-meta { color: #6b6258; font-size: 12px; }
+        .profile { display: flex; gap: 10px; align-items: center; padding: 8px 0 12px; }
+        .avatar { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: #e3d7ca; border: 1px solid #d8cdc0; }
+        .profile-name { font-weight: 700; }
+        .profile-state { color: #2d6a5f; font-size: 13px; }
         @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } body { padding: 14px; } }
       </style>
     </head>
@@ -1117,6 +1126,13 @@ func pageHTML() -> String {
 
           <div class="panel">
             <h2>Spotify</h2>
+            <div class="profile" id="spotifyProfile" hidden>
+              <img class="avatar" id="spotifyAvatar" alt="">
+              <div>
+                <div class="profile-name" id="spotifyProfileName">--</div>
+                <div class="profile-state">Connected</div>
+              </div>
+            </div>
             <div class="row"><span class="label">Auth</span><span class="value" id="spotifyAuth">--</span></div>
             <div class="row"><span class="label">User</span><span class="value" id="spotifyUser">--</span></div>
             <div class="row"><span class="label">Target</span><span class="value" id="spotifyTarget">--</span></div>
@@ -1124,7 +1140,7 @@ func pageHTML() -> String {
             <div class="row"><span class="label">Action</span><span class="value" id="spotifyAction">--</span></div>
             <div class="row"><span class="label">Error</span><span class="value" id="spotifyError">--</span></div>
             <div class="controls">
-              <button onclick="window.location.href='/spotify/login'">Connect Spotify on Mac</button>
+              <button onclick="window.location.href='/spotify/login'">Connect to Spotify</button>
             </div>
             <div class="hint">Open this page from the Mac at 127.0.0.1 for Spotify OAuth. PC control works after auth.</div>
           </div>
@@ -1284,6 +1300,12 @@ func pageHTML() -> String {
           const spotify = status.spotify || {};
           document.getElementById('spotifyAuth').textContent = spotify.configured ? (spotify.authenticated ? 'connected' : 'not connected') : 'missing config';
           document.getElementById('spotifyUser').textContent = spotify.user || '--';
+          const profile = document.getElementById('spotifyProfile');
+          profile.hidden = !spotify.authenticated;
+          document.getElementById('spotifyProfileName').textContent = spotify.user || '--';
+          const avatar = document.getElementById('spotifyAvatar');
+          avatar.hidden = !spotify.image;
+          avatar.src = spotify.image || '';
           document.getElementById('spotifyTarget').textContent = spotify.targetDevice || '--';
           document.getElementById('spotifyRedirect').textContent = spotify.redirectUri || '--';
           document.getElementById('spotifyAction').textContent = spotify.lastAction || '--';
