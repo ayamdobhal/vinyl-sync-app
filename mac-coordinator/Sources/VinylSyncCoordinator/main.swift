@@ -667,7 +667,7 @@ final class CoordinatorServer {
       }
       do {
         try spotify.handleCallback(code: code)
-        respondHTML(connection: connection, body: "<p>Spotify connected. You can close this tab or go back to <a href=\"/\">Vinyl Sync</a>.</p>")
+        respondRedirect(connection: connection, url: "/")
       } catch {
         respondHTML(connection: connection, body: "<p>Spotify connection failed: \(escapeHTML(error.localizedDescription))</p>")
       }
