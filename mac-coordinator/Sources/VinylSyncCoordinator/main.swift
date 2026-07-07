@@ -33,6 +33,12 @@ struct PlaybackRequest {
   var reason: String
 }
 
+struct SyncSettings: Codable {
+  var spotifyOffsetSeconds: Double
+
+  static let `default` = SyncSettings(spotifyOffsetSeconds: 0)
+}
+
 struct SpotifyStatus {
   var configured = false
   var authenticated = false
@@ -532,11 +538,13 @@ struct SyncSnapshot {
   var needleDropAt: Date?
   var event = "waiting"
   var playedTrackIndex: Int?
+  var settings = SyncSettings.default
 }
 
 final class StateStore {
   private let lock = NSLock()
   private var snapshot = SyncSnapshot()
+  private let settingsURL = URL(fileURLWithPath: ".state/sync-settings.json")
 
   private let activityThreshold: Float = 0.0010
   private let silenceThreshold: Float = 0.00045
@@ -544,6 +552,7 @@ final class StateStore {
   private let transitionWindowSeconds = 35.0
 
   init() {
+    snapshot.settings = Self.loadSettings(from: settingsURL)
     resetLocked(event: "ready")
   }
 
@@ -575,6 +584,17 @@ final class StateStore {
     lock.lock()
     resetLocked(event: "reset")
     lock.unlock()
+  }
+
+  func updateSettings(_ settings: SyncSettings) {
+    lock.lock()
+    snapshot.settings = settings
+    snapshot.event = "settings updated"
+    lock.unlock()
+    try? FileManager.default.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    if let data = try? JSONEncoder().encode(settings) {
+      try? data.write(to: settingsURL)
+    }
   }
 
   func nextTrack() -> PlaybackRequest? {
@@ -763,9 +783,21 @@ final class StateStore {
     snapshot.playedTrackIndex = snapshot.currentTrackIndex
     return PlaybackRequest(
       uri: uri,
-      positionMs: Int(max(0, snapshot.currentTrackElapsedSeconds) * 1000),
+      positionMs: adjustedPositionMsLocked(snapshot.currentTrackElapsedSeconds),
       reason: reason
     )
+  }
+
+  private func adjustedPositionMsLocked(_ seconds: Double) -> Int {
+    Int(max(0, seconds + snapshot.settings.spotifyOffsetSeconds) * 1000)
+  }
+
+  private static func loadSettings(from url: URL) -> SyncSettings {
+    guard let data = try? Data(contentsOf: url),
+          let settings = try? JSONDecoder().decode(SyncSettings.self, from: data) else {
+      return .default
+    }
+    return settings
   }
 }
 
@@ -937,6 +969,23 @@ final class CoordinatorServer {
       return
     }
 
+    if request.method == "POST", request.path == "/sync/settings" {
+      do {
+        guard let json = try JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
+          respondJSON(connection: connection, status: 400, body: ["error": "Missing settings payload."])
+          return
+        }
+        let offset = json["spotifyOffsetSeconds"] as? Double
+          ?? (json["spotifyOffsetSeconds"] as? Int).map(Double.init)
+          ?? 0
+        state.updateSettings(SyncSettings(spotifyOffsetSeconds: max(-30, min(30, offset))))
+        respondJSON(connection: connection, status: 200, body: ["ok": true])
+      } catch {
+        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
+      }
+      return
+    }
+
     if request.method == "POST", request.path == "/sync/next" {
       if let request = state.nextTrack() {
         spotify.play(uri: request.uri, positionMs: request.positionMs, reason: request.reason)
@@ -949,10 +998,11 @@ final class CoordinatorServer {
       let snapshot = state.currentSnapshot()
       if snapshot.sidePlan.tracks.indices.contains(snapshot.currentTrackIndex),
          let uri = snapshot.sidePlan.tracks[snapshot.currentTrackIndex].uri {
-        spotify.play(uri: uri, positionMs: Int(max(0, snapshot.currentTrackElapsedSeconds) * 1000), reason: "manual")
+        let positionMs = Int(max(0, snapshot.currentTrackElapsedSeconds + snapshot.settings.spotifyOffsetSeconds) * 1000)
+        spotify.play(uri: uri, positionMs: positionMs, reason: "manual")
         respondJSON(connection: connection, status: 200, body: ["ok": true])
       } else {
-        respondJSON(connection: connection, status: 400, body: ["error": "Current track has no Spotify URI. Load the side from Spotify search first."])
+        respondJSON(connection: connection, status: 400, body: ["error": "Current track has no Spotify URI. Load the side from Discogs first."])
       }
       return
     }
@@ -1088,6 +1138,9 @@ final class CoordinatorServer {
       "nextTrackTitle": snapshot.nextTrackTitle,
       "needleDropAt": snapshot.needleDropAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
       "event": snapshot.event,
+      "settings": [
+        "spotifyOffsetSeconds": snapshot.settings.spotifyOffsetSeconds
+      ],
       "spotify": spotifyPayload(),
       "discogs": discogsPayload()
     ]
@@ -1419,12 +1472,18 @@ func pageHTML() -> String {
             <div class="row"><span class="label">Silence</span><span class="value" id="silence">--</span></div>
             <div class="row"><span class="label">Side elapsed</span><span class="value" id="sideElapsed">--</span></div>
             <div class="row"><span class="label">Needle drop</span><span class="value" id="needleDrop">--</span></div>
+            <div class="row"><span class="label">Spotify offset</span><span class="value" id="spotifyOffsetLabel">--</span></div>
+            <input id="spotifyOffset" type="number" min="-30" max="30" step="0.25" value="0">
             <div class="controls">
               <button onclick="post('/sync/arm')">Arm</button>
               <button class="secondary" onclick="post('/sync/next')">Next track</button>
               <button class="secondary" onclick="post('/spotify/play-current')">Play current muted</button>
+              <button class="secondary" onclick="nudgeOffset(-1)">-1s</button>
+              <button class="secondary" onclick="nudgeOffset(1)">+1s</button>
+              <button class="secondary" onclick="saveOffset()">Save offset</button>
               <button class="secondary" onclick="post('/sync/reset')">Reset</button>
             </div>
+            <div class="hint">Positive offset starts Spotify later in the track; negative starts it earlier.</div>
           </div>
 
           <div class="panel">
@@ -1644,6 +1703,27 @@ func pageHTML() -> String {
           await tick();
         }
 
+        async function saveOffset() {
+          const input = document.getElementById('spotifyOffset');
+          const value = Number(input.value || 0);
+          const response = await fetch('/sync/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spotifyOffsetSeconds: value })
+          });
+          if (!response.ok) {
+            const data = await response.json().catch(() => ({ error: 'Could not save offset.' }));
+            alert(data.error || 'Could not save offset.');
+          }
+          await tick();
+        }
+
+        async function nudgeOffset(delta) {
+          const input = document.getElementById('spotifyOffset');
+          input.value = (Number(input.value || 0) + delta).toFixed(2);
+          await saveOffset();
+        }
+
         async function saveSide() {
           const body = document.getElementById('sideJson').value;
           const response = await fetch('/side', {
@@ -1730,6 +1810,13 @@ func pageHTML() -> String {
           document.getElementById('silence').textContent = Number(status.silenceSeconds || 0).toFixed(1) + 's';
           document.getElementById('sideElapsed').textContent = fmt(status.sideElapsedSeconds);
           document.getElementById('needleDrop').textContent = status.needleDropAt || '--';
+          const settings = status.settings || {};
+          const offset = Number(settings.spotifyOffsetSeconds || 0);
+          document.getElementById('spotifyOffsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s`;
+          const offsetInput = document.getElementById('spotifyOffset');
+          if (document.activeElement !== offsetInput) {
+            offsetInput.value = offset.toFixed(2);
+          }
           document.getElementById('sideName').textContent = side.name || '--';
           document.getElementById('track').textContent = `${Number(status.currentTrackIndex || 0) + 1}. ${status.currentTrackTitle}`;
           document.getElementById('trackElapsed').textContent = fmt(status.currentTrackElapsedSeconds);
