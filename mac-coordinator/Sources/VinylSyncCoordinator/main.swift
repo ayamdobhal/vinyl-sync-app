@@ -958,6 +958,11 @@ final class CoordinatorServer {
       return
     }
 
+    if request.method == "GET", request.path == "/favicon.svg" {
+      respond(connection: connection, status: 200, contentType: "image/svg+xml", body: Data(faviconSVG().utf8))
+      return
+    }
+
     if request.method == "GET", request.path == "/status" {
       let snapshot = state.currentSnapshot()
       respondJSON(connection: connection, status: 200, body: statusPayload(snapshot))
@@ -1616,6 +1621,18 @@ func escapeHTML(_ value: String) -> String {
     .replacingOccurrences(of: "\"", with: "&quot;")
 }
 
+func faviconSVG() -> String {
+  """
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+    <rect width="64" height="64" rx="14" fill="#101215"/>
+    <circle cx="32" cy="32" r="23" fill="#17191d" stroke="#d6437f" stroke-width="3"/>
+    <circle cx="32" cy="32" r="8" fill="#d6437f"/>
+    <circle cx="32" cy="32" r="3" fill="#edeef0"/>
+    <path d="M32 9v10M55 32H45M32 55V45M9 32h10" stroke="#5c636d" stroke-width="3" stroke-linecap="round"/>
+  </svg>
+  """
+}
+
 func pageHTML() -> String {
   """
   <!doctype html>
@@ -1624,6 +1641,7 @@ func pageHTML() -> String {
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>Vinyl Sync</title>
+      <link rel="icon" type="image/svg+xml" href="/favicon.svg">
       <link rel="preconnect" href="https://fonts.googleapis.com">
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
       <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
