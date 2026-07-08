@@ -1693,9 +1693,9 @@ func pageHTML() -> String {
         .drop-footer { padding: 8px 10px 6px; border-top: 1px solid var(--bd); margin-top: 4px; display: flex; justify-content: space-between; align-items: center; }
         .linkish { border: 0; background: transparent; color: var(--sub); padding: 0; font-size: 11.5px; }
         .linkish:hover { color: var(--acc); }
-        .bottom-player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: grid; grid-template-columns: 320px minmax(0, 1fr) 320px; gap: 24px; align-items: center; padding: 12px 24px; background: color-mix(in srgb, var(--card) 94%, transparent); border-top: 1px solid var(--bd); backdrop-filter: blur(18px); }
-        .now-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
-        .now-copy { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+        .bottom-player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; justify-content: center; align-items: center; padding: 12px 24px; background: color-mix(in srgb, var(--card) 94%, transparent); border-top: 1px solid var(--bd); backdrop-filter: blur(18px); }
+        .now-main { display: flex; align-items: center; gap: 12px; width: min(560px, calc(100vw - 48px)); min-width: 0; }
+        .now-copy { display: flex; flex: 1; flex-direction: column; gap: 7px; min-width: 0; }
         .now-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
         .now-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .now-sub { font-size: 11.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1773,7 +1773,7 @@ func pageHTML() -> String {
         .field label { font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
         .field input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px; font: 500 12.5px 'IBM Plex Mono', monospace; }
         .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
-        @media (max-width: 1200px) { .layout { padding: 18px 24px 112px; } .rail { position: static; max-height: none; } .bottom-player { grid-template-columns: 1fr; } .bottom-spacer { display: none; } }
+        @media (max-width: 1200px) { .layout { padding: 18px 24px 112px; } .rail { position: static; max-height: none; } }
       </style>
     </head>
     <body>
@@ -1861,7 +1861,6 @@ func pageHTML() -> String {
         </aside>
       </main>
       <footer class="bottom-player">
-        <div class="bottom-spacer"></div>
         <div class="now-main">
           <div class="art-md" id="nowArt"></div>
           <div class="now-copy">
@@ -1869,7 +1868,6 @@ func pageHTML() -> String {
             <div class="progress-row"><div class="time" id="nowElapsed"></div><div class="mini-progress"><div class="fill" id="nowFill"></div></div><div class="time" id="nowDur"></div></div>
           </div>
         </div>
-        <div class="bottom-spacer"></div>
       </footer>
       <script>
         let releases = [];
