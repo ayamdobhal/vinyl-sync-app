@@ -1650,7 +1650,7 @@ func pageHTML() -> String {
         .spotify-name { font-size: 12px; font-weight: 500; }
         .theme-toggle { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 1.5px solid var(--tx); background: linear-gradient(90deg,var(--tx) 50%,transparent 50%); cursor: pointer; }
         .outline { padding: 6px 13px; border: 1px solid var(--bd); border-radius: 8px; background: var(--card); font-size: 12.5px; font-weight: 500; }
-        .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; gap: 16px; padding: 18px 24px 28px; max-width: 1680px; margin: 0 auto; align-items: start; }
+        .layout { padding: 18px 368px 28px 348px; max-width: 1680px; margin: 0 auto; }
         .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
         .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .card { background: var(--card); border: 1px solid var(--bd); border-radius: 12px; padding: 16px 18px; }
@@ -1686,9 +1686,11 @@ func pageHTML() -> String {
         .event-type { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--gy); text-transform: uppercase; }
         .event.spotify .event-type, .event.track .event-type { color: var(--gn); } .event.needle .event-type { color: var(--acc); } .event.settings .event-type { color: var(--pu); } .event.error .event-type { color: var(--rd); }
         .event-msg { font-size: 12.5px; }
-        .rail { position: sticky; top: 76px; align-self: start; max-height: calc(100vh - 94px); overflow: auto; padding: 16px; }
+        .rail { position: fixed; top: 76px; bottom: 18px; overflow: auto; padding: 16px; z-index: 4; }
         .left-rail { display: flex; flex-direction: column; gap: 12px; }
         .right-rail { display: flex; flex-direction: column; gap: 14px; }
+        .left-rail { left: 24px; width: 300px; }
+        .right-rail { right: 24px; width: 320px; }
         .rail-title { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
         .sidebar { padding: 16px; }
         .disc-title { margin-top: 12px; font-size: 17px; font-weight: 600; }
@@ -1709,21 +1711,21 @@ func pageHTML() -> String {
         .field label { font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
         .field input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px; font: 500 12.5px 'IBM Plex Mono', monospace; }
         .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
-        @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } .rail { position: static; max-height: none; } .now-header { display: none; } }
+        @media (max-width: 1200px) { .layout { padding: 18px 24px 28px; } .rail { position: static; max-height: none; } .now-header { display: none; } }
       </style>
     </head>
     <body>
       <header class="header">
         <div class="logo">Vinyl Sync<span>.</span></div>
         <div class="now-header">
-          <div class="art-md" id="nowArt">art</div>
+          <div class="art-md" id="nowArt"></div>
           <div class="now-copy">
-            <div class="now-line"><div class="now-title" id="nowTitle">--</div><div class="now-sub" id="nowSub">--</div></div>
-            <div class="progress-row"><div class="time" id="nowElapsed">0:00</div><div class="mini-progress"><div class="fill" id="nowFill"></div></div><div class="time" id="nowDur">0:00</div></div>
+            <div class="now-line"><div class="now-title" id="nowTitle"></div><div class="now-sub" id="nowSub"></div></div>
+            <div class="progress-row"><div class="time" id="nowElapsed"></div><div class="mini-progress"><div class="fill" id="nowFill"></div></div><div class="time" id="nowDur"></div></div>
           </div>
         </div>
         <div class="spotify-chip" id="spotifyChip" onclick="connectSpotifyIfNeeded()" title="Spotify">
-          <div class="avatar" id="spotifyAvatar">--</div><div class="dot" id="spotifyDot"></div><div class="spotify-name" id="spotifyName">Spotify</div>
+          <div class="avatar" id="spotifyAvatar"></div><div class="dot" id="spotifyDot"></div><div class="spotify-name" id="spotifyName">Spotify</div>
         </div>
         <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme"></button>
       </header>
@@ -1733,8 +1735,8 @@ func pageHTML() -> String {
             <div class="rail-title">Disc selection</div>
             <div class="release-wrap rail-picker">
               <div class="chip" id="releaseChip" onclick="toggleDropdown()">
-                <div class="art-sm" id="chipArt">art</div>
-                <div class="release-title"><span id="chipTitle">Loading collection</span> <span id="chipArtist"></span></div>
+                <div class="art-sm" id="chipArt"></div>
+                <div class="release-title"><span id="chipTitle"></span> <span id="chipArtist"></span></div>
                 <div class="caret">▾</div>
               </div>
               <div class="dropdown" id="releaseDropdown">
@@ -1743,13 +1745,13 @@ func pageHTML() -> String {
               </div>
             </div>
           </div>
-          <div class="art-xl" id="discArt">art</div>
-          <div class="disc-title" id="discTitle">No disc selected</div>
-          <div class="disc-meta" id="discMeta">Select a release from Discogs</div>
+          <div class="art-xl" id="discArt"></div>
+          <div class="disc-title" id="discTitle"></div>
+          <div class="disc-meta" id="discMeta"></div>
           <div class="side-pills" id="sidePills"></div>
           <div class="track-list" id="trackList"></div>
           <button class="use-side" onclick="saveSelectedSide()">Use this side</button>
-          <div class="caption" id="discCaption">Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.</div>
+          <div class="caption" id="discCaption"></div>
         </aside>
         <section class="stack">
           <div class="card">
@@ -1764,20 +1766,20 @@ func pageHTML() -> String {
             <div class="card">
               <div class="card-title"><span>Album sync</span><span class="badge run" id="modeBadge">Idle</span></div>
               <div class="stat-list">
-                <div class="stat"><span>Side elapsed</span><strong><span id="sideElapsed">0:00</span> / <span id="sideTotal">0:00</span></strong></div>
+                <div class="stat"><span>Side elapsed</span><strong><span id="sideElapsed"></span> <span id="sideDivider"></span> <span id="sideTotal"></span></strong></div>
                 <div class="progress"><div class="fill" id="sideFill"></div></div>
-                <div class="stat"><span>Needle drop</span><strong id="needleDrop">--</strong></div>
+                <div class="stat"><span>Needle drop</span><strong id="needleDrop"></strong></div>
                 <div class="stat"><span>Silence</span><strong id="silence">0.0 s</strong></div>
                 <div class="stat"><span>Audio active</span><strong id="active">no</strong></div>
               </div>
             </div>
             <div class="card">
-              <div class="card-title"><span>Track sync</span><span class="track-ref" id="trackRef">--</span></div>
+              <div class="card-title"><span>Track sync</span><span class="track-ref" id="trackRef"></span></div>
               <div class="stat-list">
-                <div class="stat"><span>Track elapsed</span><strong id="trackElapsed">0:00</strong></div>
-                <div class="stat"><span>Est. remaining</span><strong id="trackRemaining">0:00</strong></div>
+                <div class="stat"><span>Track elapsed</span><strong id="trackElapsed"></strong></div>
+                <div class="stat"><span>Est. remaining</span><strong id="trackRemaining"></strong></div>
                 <div class="stat"><span>Spotify offset</span><strong class="accent" id="offsetLabel">+0.00 s</strong></div>
-                <div class="stat"><span>Next</span><strong id="nextTrack">--</strong></div>
+                <div class="stat"><span>Next</span><strong id="nextTrack"></strong></div>
                 <div class="actions"><button class="primary" onclick="post('/sync/arm')">Arm</button><button class="secondary" onclick="post('/sync/next')">Next track</button><button class="secondary" onclick="post('/spotify/play-current')">Play muted</button></div>
               </div>
             </div>
@@ -1834,8 +1836,8 @@ func pageHTML() -> String {
         function getAlbumSides(album) { return album?.sides || { A: album?.tracks || [] }; }
         function getSideKeys(album) { const sides = getAlbumSides(album); return (album?.sideOrder || Object.keys(sides).sort()).filter((key) => (sides[key] || []).length); }
         function selectedTracks() { return (getAlbumSides(activeAlbum)[selectedSide] || []); }
-        function sidePlanFromAlbum(album, sideKey) { return { name: `${album?.artists ? album.artists + ' - ' : ''}${album?.name || 'Selected disc'} - Side ${sideKey}`, tracks: getAlbumSides(album)[sideKey] || [] }; }
-        function artHTML(src, label = 'art') { return src ? `<img src="${src}" alt="">` : label; }
+        function sidePlanFromAlbum(album, sideKey) { return { name: `${album?.artists ? album.artists + ' - ' : ''}${album?.name || ''}${album?.name ? ' - ' : ''}Side ${sideKey}`, tracks: getAlbumSides(album)[sideKey] || [] }; }
+        function artHTML(src, label = '') { return src ? `<img src="${src}" alt="">` : label; }
         function firstName(name) { return String(name || 'Spotify').split(' ')[0] || 'Spotify'; }
         function initials(name) { return String(name || '--').split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase() || '--'; }
         function classifyEvent(event) {
@@ -1864,6 +1866,34 @@ func pageHTML() -> String {
             row.innerHTML = `<span class="event-time mono">${item.at.toLocaleTimeString()}</span><span class="event-type">${item.type}</span><span class="event-msg">${item.event}</span>`;
             target.append(row);
           }
+        }
+        function clearDiscDisplay() {
+          document.getElementById('discTitle').textContent = '';
+          document.getElementById('discMeta').textContent = '';
+          document.getElementById('discArt').innerHTML = '';
+          document.getElementById('chipArt').innerHTML = '';
+          document.getElementById('chipTitle').textContent = '';
+          document.getElementById('chipArtist').textContent = '';
+          document.getElementById('discCaption').textContent = '';
+          document.getElementById('sidePills').innerHTML = '';
+          document.getElementById('trackList').innerHTML = '';
+        }
+        function clearTrackDisplay() {
+          document.getElementById('trackRef').textContent = '';
+          document.getElementById('trackElapsed').textContent = '';
+          document.getElementById('trackRemaining').textContent = '';
+          document.getElementById('nextTrack').textContent = '';
+          document.getElementById('nowTitle').textContent = '';
+          document.getElementById('nowSub').textContent = '';
+          document.getElementById('nowElapsed').textContent = '';
+          document.getElementById('nowDur').textContent = '';
+          document.getElementById('nowFill').style.width = '0%';
+          document.getElementById('nowArt').innerHTML = '';
+          document.getElementById('sideElapsed').textContent = '';
+          document.getElementById('sideDivider').textContent = '';
+          document.getElementById('sideTotal').textContent = '';
+          document.getElementById('sideFill').style.width = '0%';
+          document.getElementById('needleDrop').textContent = '';
         }
         function toggleDropdown(force) { document.getElementById('releaseDropdown').classList.toggle('open', force); }
         document.addEventListener('click', (event) => { if (!event.target.closest('.release-wrap')) toggleDropdown(false); });
@@ -1938,14 +1968,15 @@ func pageHTML() -> String {
           rmsHistory.forEach((value, index) => { const x = rmsHistory.length <= 1 ? width : (index / (rmsHistory.length - 1)) * width; const y = yFor(value); if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }); ctx.stroke();
         }
         function renderDisc(status) {
-          const side = status?.side || (activeAlbum ? sidePlanFromAlbum(activeAlbum, selectedSide) : { name: 'No side', tracks: [] });
-          const tracks = activeAlbum ? selectedTracks() : (side.tracks || []);
-          const titleParts = String(activeAlbum?.name || side.name || 'No disc selected').split(' - Side ');
-          document.getElementById('discTitle').textContent = activeAlbum?.name || titleParts[0] || 'No disc selected';
+          if (!activeAlbum) { clearDiscDisplay(); return; }
+          const side = status?.side || sidePlanFromAlbum(activeAlbum, selectedSide);
+          const tracks = selectedTracks();
+          const titleParts = String(activeAlbum?.name || side.name || '').split(' - Side ');
+          document.getElementById('discTitle').textContent = activeAlbum?.name || titleParts[0] || '';
           document.getElementById('discMeta').textContent = activeAlbum ? `${activeAlbum.artists || ''} · Side ${selectedSide} · ${tracks.length} tracks · ${fmt(sideDuration({ tracks }))}` : `${tracks.length} tracks · ${fmt(sideDuration(side))}`;
           document.getElementById('discArt').innerHTML = artHTML(activeAlbum?.image);
           document.getElementById('chipArt').innerHTML = artHTML(activeAlbum?.image);
-          document.getElementById('chipTitle').textContent = activeAlbum?.name || 'Select disc';
+          document.getElementById('chipTitle').textContent = activeAlbum?.name || '';
           document.getElementById('chipArtist').textContent = activeAlbum?.artists ? `— ${activeAlbum.artists}` : '';
           document.getElementById('discCaption').textContent = activeAlbum?.spotifyMatch?.name ? `Spotify match: ${activeAlbum.spotifyMatch.artists ? activeAlbum.spotifyMatch.artists + ' - ' : ''}${activeAlbum.spotifyMatch.name} (${activeAlbum.spotifyMatch.confidence}, ${activeAlbum.spotifyMatch.trackMatches}/${activeAlbum.spotifyMatch.discogsTrackCount} tracks).` : 'Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.';
           const pills = document.getElementById('sidePills'); pills.innerHTML = '';
@@ -1963,9 +1994,29 @@ func pageHTML() -> String {
           pushEvent(status.event); drawRmsGraph(Number(status.rms || 0), settings); applySettings(settings);
           document.getElementById('streamBadge').className = `badge ${status.audioConnected ? '' : 'bad'}`; document.getElementById('streamBadge').innerHTML = `<span class="dot ${status.audioConnected ? '' : 'bad'}"></span>${status.audioConnected ? 'Connected' : 'Waiting'}`;
           document.getElementById('deviceName').textContent = status.lastDeviceName || 'none'; document.getElementById('khz').textContent = status.sampleRate ? `${(Number(status.sampleRate) / 1000).toFixed(1)} kHz` : '-- kHz'; document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5); document.getElementById('framesLabel').textContent = `frames ${status.frameCount || 0}`; document.getElementById('silenceAxis').textContent = `silence threshold ${Number(settings.silenceThreshold || 0).toFixed(5)}`;
-          document.getElementById('modeBadge').textContent = status.mode || 'idle'; document.getElementById('sideElapsed').textContent = fmt(status.sideElapsedSeconds); document.getElementById('sideTotal').textContent = fmt(sideDuration(side)); document.getElementById('sideFill').style.width = `${Math.min(100, (Number(status.sideElapsedSeconds || 0) / Math.max(1, sideDuration(side))) * 100)}%`; document.getElementById('needleDrop').textContent = status.needleDropAt || '--'; document.getElementById('silence').textContent = `${Number(status.silenceSeconds || 0).toFixed(1)} s`; document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no'; document.getElementById('active').className = status.audioActive ? 'good' : '';
-          const currentTrack = (side.tracks || [])[status.currentTrackIndex || 0] || {}; document.getElementById('trackRef').textContent = `${currentTrack.position || '--'} · ${status.currentTrackTitle || '--'}`; document.getElementById('trackElapsed').textContent = fmt(status.currentTrackElapsedSeconds); document.getElementById('trackRemaining').textContent = fmt(status.currentTrackRemainingSeconds); const offset = Number(settings.spotifyOffsetSeconds || 0); document.getElementById('offsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)} s`; document.getElementById('nextTrack').textContent = status.nextTrackTitle || '--';
-          document.getElementById('nowTitle').textContent = status.currentTrackTitle || '--'; document.getElementById('nowSub').textContent = `${activeAlbum?.artists || ''} · ${currentTrack.position || ''}`; document.getElementById('nowElapsed').textContent = fmt(status.currentTrackElapsedSeconds); document.getElementById('nowDur').textContent = fmt(currentTrack.durationSeconds); document.getElementById('nowFill').style.width = `${Math.min(100, (Number(status.currentTrackElapsedSeconds || 0) / Math.max(1, Number(currentTrack.durationSeconds || 1))) * 100)}%`; document.getElementById('nowArt').innerHTML = artHTML(activeAlbum?.image);
+          document.getElementById('modeBadge').textContent = status.mode || 'idle'; document.getElementById('silence').textContent = `${Number(status.silenceSeconds || 0).toFixed(1)} s`; document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no'; document.getElementById('active').className = status.audioActive ? 'good' : '';
+          const showSelectedDisc = Boolean(activeAlbum);
+          const currentTrack = showSelectedDisc ? (selectedTracks()[status.currentTrackIndex || 0] || {}) : {};
+          if (showSelectedDisc) {
+            document.getElementById('sideElapsed').textContent = fmt(status.sideElapsedSeconds);
+            document.getElementById('sideDivider').textContent = '/';
+            document.getElementById('sideTotal').textContent = fmt(sideDuration(side));
+            document.getElementById('sideFill').style.width = `${Math.min(100, (Number(status.sideElapsedSeconds || 0) / Math.max(1, sideDuration(side))) * 100)}%`;
+            document.getElementById('needleDrop').textContent = status.needleDropAt || '';
+            document.getElementById('trackRef').textContent = `${currentTrack.position || ''}${currentTrack.position ? ' · ' : ''}${status.currentTrackTitle || ''}`;
+            document.getElementById('trackElapsed').textContent = fmt(status.currentTrackElapsedSeconds);
+            document.getElementById('trackRemaining').textContent = fmt(status.currentTrackRemainingSeconds);
+            document.getElementById('nextTrack').textContent = status.nextTrackTitle || '';
+            document.getElementById('nowTitle').textContent = status.currentTrackTitle || '';
+            document.getElementById('nowSub').textContent = [activeAlbum?.artists, currentTrack.position].filter(Boolean).join(' · ');
+            document.getElementById('nowElapsed').textContent = fmt(status.currentTrackElapsedSeconds);
+            document.getElementById('nowDur').textContent = fmt(currentTrack.durationSeconds);
+            document.getElementById('nowFill').style.width = `${Math.min(100, (Number(status.currentTrackElapsedSeconds || 0) / Math.max(1, Number(currentTrack.durationSeconds || 1))) * 100)}%`;
+            document.getElementById('nowArt').innerHTML = artHTML(activeAlbum?.image);
+          } else {
+            clearTrackDisplay();
+          }
+          const offset = Number(settings.spotifyOffsetSeconds || 0); document.getElementById('offsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)} s`;
           const spotify = status.spotify || {}; document.getElementById('spotifyDot').className = `dot ${spotify.authenticated ? '' : 'bad'}`; document.getElementById('spotifyName').textContent = spotify.authenticated ? firstName(spotify.user) : 'Connect'; document.getElementById('spotifyChip').title = spotify.authenticated ? `Spotify connected as ${spotify.user} (${spotify.targetDevice || ''})` : 'Connect Spotify'; document.getElementById('spotifyAvatar').innerHTML = spotify.image ? `<img src="${spotify.image}" alt="">` : initials(spotify.user);
           renderDisc(status);
         }
