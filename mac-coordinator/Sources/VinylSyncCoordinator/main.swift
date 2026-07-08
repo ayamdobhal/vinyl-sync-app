@@ -1624,6 +1624,9 @@ func pageHTML() -> String {
         .caret { font-size: 9px; color: var(--sub); }
         .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 300px; max-height: 520px; overflow: auto; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
         .dropdown.open { display: block; }
+        .disc-search { position: sticky; top: 0; z-index: 2; background: var(--card); padding: 4px 4px 8px; }
+        .disc-search input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; outline: none; }
+        .disc-search input:focus { border-color: var(--hbd); }
         .release-row { display: flex; align-items: center; gap: 10px; padding: 7px; border-radius: 7px; cursor: pointer; }
         .release-row:hover { background: var(--p2); }
         .release-row.selected { background: var(--accSoft); }
@@ -1734,6 +1737,7 @@ func pageHTML() -> String {
                 <div class="caret">▾</div>
               </div>
               <div class="dropdown" id="releaseDropdown">
+                <div class="disc-search"><input id="discSearch" type="search" placeholder="Search discs" autocomplete="off" oninput="setDiscSearch(this.value)"></div>
                 <div id="releaseRows"></div>
                 <div class="drop-footer"><button class="linkish" onclick="loadDiscogsCollection(event)">Refresh collection</button><div class="mono" id="collectionCount">0 releases</div></div>
               </div>
@@ -1813,6 +1817,7 @@ func pageHTML() -> String {
         let activeAlbum = null;
         let selectedSide = 'A';
         let selectedReleaseId = null;
+        let discSearchTerm = '';
         let lastStatus = null;
         const rmsHistory = [];
         const eventLog = [];
@@ -1845,6 +1850,7 @@ func pageHTML() -> String {
         function artHTML(src, label = '') { return src ? `<img src="${src}" alt="">` : label; }
         function firstName(name) { return String(name || 'Spotify').split(' ')[0] || 'Spotify'; }
         function initials(name) { return String(name || '--').split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase() || '--'; }
+        function normalizeSearch(value) { return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
         function classifyEvent(event) {
           const value = String(event || '').toLowerCase();
           if (value.includes('spotify') || value.includes('play')) return 'spotify';
@@ -1900,8 +1906,13 @@ func pageHTML() -> String {
           document.getElementById('sideFill').style.width = '0%';
           document.getElementById('needleDrop').textContent = '';
         }
-        function toggleDropdown(force) { document.getElementById('releaseDropdown').classList.toggle('open', force); }
+        function toggleDropdown(force) {
+          const dropdown = document.getElementById('releaseDropdown');
+          dropdown.classList.toggle('open', force);
+          if (dropdown.classList.contains('open')) setTimeout(() => document.getElementById('discSearch')?.focus(), 0);
+        }
         document.addEventListener('click', (event) => { if (!event.target.closest('.release-wrap')) toggleDropdown(false); });
+        function setDiscSearch(value) { discSearchTerm = value; renderReleaseRows(); }
         function connectSpotifyIfNeeded() { if (!lastStatus?.spotify?.authenticated) window.location.href = '/spotify/login'; }
         async function post(path) {
           const response = await fetch(path, { method: 'POST' });
@@ -1922,14 +1933,22 @@ func pageHTML() -> String {
         function renderReleaseRows() {
           const rows = document.getElementById('releaseRows');
           rows.innerHTML = '';
-          for (const release of releases) {
+          const query = normalizeSearch(discSearchTerm);
+          const filtered = query ? releases.filter((release) => normalizeSearch(`${release.title} ${release.artists || ''} ${release.year || ''}`).includes(query)) : releases;
+          if (!filtered.length) {
+            const empty = document.createElement('div');
+            empty.className = 'drop-footer';
+            empty.textContent = query ? 'No matching discs' : 'No discs loaded';
+            rows.append(empty);
+          }
+          for (const release of filtered) {
             const row = document.createElement('div');
             row.className = `release-row ${Number(release.id) === Number(selectedReleaseId) ? 'selected' : ''}`;
             row.onclick = () => loadDiscogsRelease(release.id);
             row.innerHTML = `<div class="art-sm">${artHTML(release.thumb)}</div><div style="flex:1;min-width:0"><div class="row-title">${release.title}</div><div class="row-meta">${release.artists || ''} · ${release.year || ''}</div></div><div class="accent">${Number(release.id) === Number(selectedReleaseId) ? '●' : ''}</div>`;
             rows.append(row);
           }
-          document.getElementById('collectionCount').textContent = `${releases.length} releases`;
+          document.getElementById('collectionCount').textContent = query ? `${filtered.length} / ${releases.length} releases` : `${releases.length} releases`;
         }
         async function loadDiscogsCollection(event) {
           if (event) event.stopPropagation();
