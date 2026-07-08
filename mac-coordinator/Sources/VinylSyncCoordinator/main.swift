@@ -31,10 +31,12 @@ struct PlaybackRequest {
   var uri: String
   var positionMs: Int
   var reason: String
+  var startDelaySeconds: Double
 }
 
 struct SyncSettings: Codable {
   var spotifyOffsetSeconds: Double
+  var spotifyStartDelaySeconds: Double
   var activityThreshold: Double
   var silenceThreshold: Double
   var leadInSilenceSeconds: Double
@@ -43,6 +45,7 @@ struct SyncSettings: Codable {
 
   static let `default` = SyncSettings(
     spotifyOffsetSeconds: 0,
+    spotifyStartDelaySeconds: 0,
     activityThreshold: 0.0010,
     silenceThreshold: 0.00045,
     leadInSilenceSeconds: 0.45,
@@ -52,6 +55,7 @@ struct SyncSettings: Codable {
 
   init(
     spotifyOffsetSeconds: Double = 0,
+    spotifyStartDelaySeconds: Double = 0,
     activityThreshold: Double = 0.0010,
     silenceThreshold: Double = 0.00045,
     leadInSilenceSeconds: Double = 0.45,
@@ -59,6 +63,7 @@ struct SyncSettings: Codable {
     transitionWindowSeconds: Double = 35
   ) {
     self.spotifyOffsetSeconds = spotifyOffsetSeconds
+    self.spotifyStartDelaySeconds = spotifyStartDelaySeconds
     self.activityThreshold = activityThreshold
     self.silenceThreshold = silenceThreshold
     self.leadInSilenceSeconds = leadInSilenceSeconds
@@ -69,6 +74,7 @@ struct SyncSettings: Codable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     spotifyOffsetSeconds = try container.decodeIfPresent(Double.self, forKey: .spotifyOffsetSeconds) ?? Self.default.spotifyOffsetSeconds
+    spotifyStartDelaySeconds = try container.decodeIfPresent(Double.self, forKey: .spotifyStartDelaySeconds) ?? Self.default.spotifyStartDelaySeconds
     activityThreshold = try container.decodeIfPresent(Double.self, forKey: .activityThreshold) ?? Self.default.activityThreshold
     silenceThreshold = try container.decodeIfPresent(Double.self, forKey: .silenceThreshold) ?? Self.default.silenceThreshold
     leadInSilenceSeconds = try container.decodeIfPresent(Double.self, forKey: .leadInSilenceSeconds) ?? Self.default.leadInSilenceSeconds
@@ -654,7 +660,7 @@ final class StateStore {
     snapshot.pendingTrackIndex = nil
     snapshot.mode = "running"
     snapshot.event = "manual next"
-    let request = playbackRequestLocked(reason: "manual next")
+    let request = playbackRequestLocked(reason: "manual next", useStartDelay: false)
     lock.unlock()
     return request
   }
@@ -838,7 +844,7 @@ final class StateStore {
     snapshot.event = event
   }
 
-  private func playbackRequestLocked(reason: String) -> PlaybackRequest? {
+  private func playbackRequestLocked(reason: String, useStartDelay: Bool = true) -> PlaybackRequest? {
     guard snapshot.sidePlan.tracks.indices.contains(snapshot.currentTrackIndex),
           snapshot.playedTrackIndex != snapshot.currentTrackIndex else {
       return nil
@@ -852,7 +858,8 @@ final class StateStore {
     return PlaybackRequest(
       uri: uri,
       positionMs: adjustedPositionMsLocked(snapshot.currentTrackElapsedSeconds),
-      reason: reason
+      reason: reason,
+      startDelaySeconds: useStartDelay ? snapshot.settings.spotifyStartDelaySeconds : 0
     )
   }
 
@@ -1062,6 +1069,9 @@ final class CoordinatorServer {
         let offset = json["spotifyOffsetSeconds"] as? Double
           ?? (json["spotifyOffsetSeconds"] as? Int).map(Double.init)
           ?? 0
+        let startDelay = json["spotifyStartDelaySeconds"] as? Double
+          ?? (json["spotifyStartDelaySeconds"] as? Int).map(Double.init)
+          ?? SyncSettings.default.spotifyStartDelaySeconds
         let activityThreshold = json["activityThreshold"] as? Double
           ?? (json["activityThreshold"] as? Int).map(Double.init)
           ?? SyncSettings.default.activityThreshold
@@ -1079,6 +1089,7 @@ final class CoordinatorServer {
           ?? SyncSettings.default.transitionWindowSeconds
         state.updateSettings(SyncSettings(
           spotifyOffsetSeconds: max(-30, min(30, offset)),
+          spotifyStartDelaySeconds: max(0, min(10, startDelay)),
           activityThreshold: max(0.00001, min(0.1, activityThreshold)),
           silenceThreshold: max(0.00001, min(0.1, silenceThreshold)),
           leadInSilenceSeconds: max(0.05, min(5, leadInSilenceSeconds)),
@@ -1094,7 +1105,7 @@ final class CoordinatorServer {
 
     if request.method == "POST", request.path == "/sync/next" {
       if let request = state.nextTrack() {
-        spotify.play(uri: request.uri, positionMs: request.positionMs, reason: request.reason)
+        schedulePlayback(request)
       }
       respondJSON(connection: connection, status: 200, body: ["ok": true])
       return
@@ -1219,7 +1230,18 @@ final class CoordinatorServer {
 
     let rms = sampleCount == 0 ? 0 : sqrt(sum / Float(sampleCount))
     if let request = state.receiveAudio(sampleCount: sampleCount, rms: rms) {
+      schedulePlayback(request)
+    }
+  }
+
+  private func schedulePlayback(_ request: PlaybackRequest) {
+    guard request.startDelaySeconds > 0 else {
       spotify.play(uri: request.uri, positionMs: request.positionMs, reason: request.reason)
+      return
+    }
+
+    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + request.startDelaySeconds) { [spotify] in
+      spotify.play(uri: request.uri, positionMs: request.positionMs, reason: "\(request.reason) delayed")
     }
   }
 
@@ -1246,6 +1268,7 @@ final class CoordinatorServer {
       "event": snapshot.event,
       "settings": [
         "spotifyOffsetSeconds": snapshot.settings.spotifyOffsetSeconds,
+        "spotifyStartDelaySeconds": snapshot.settings.spotifyStartDelaySeconds,
         "activityThreshold": snapshot.settings.activityThreshold,
         "silenceThreshold": snapshot.settings.silenceThreshold,
         "leadInSilenceSeconds": snapshot.settings.leadInSilenceSeconds,
@@ -1776,7 +1799,7 @@ func pageHTML() -> String {
               <div class="stat-list">
                 <div class="stat"><span>Track elapsed</span><strong id="trackElapsed"></strong></div>
                 <div class="stat"><span>Est. remaining</span><strong id="trackRemaining"></strong></div>
-                <div class="stat"><span>Spotify offset</span><strong class="accent" id="offsetLabel">+0.00 s</strong></div>
+                <div class="stat"><span>Position offset</span><strong class="accent" id="offsetLabel">+0.00 s</strong></div>
                 <div class="stat"><span>Next</span><strong id="nextTrack"></strong></div>
                 <div class="actions"><button class="primary" onclick="post('/sync/arm')">Arm</button><button class="secondary" onclick="post('/sync/next')">Next track</button><button class="secondary" onclick="post('/spotify/play-current')">Play muted</button></div>
               </div>
@@ -1790,14 +1813,15 @@ func pageHTML() -> String {
         <aside class="card rail right-rail">
           <div class="rail-title">Sync settings</div>
           <div class="settings-grid">
-            <div class="field"><label>Spotify offset (s)</label><input id="spotifyOffset" type="number" min="-30" max="30" step="0.25"></div>
+            <div class="field"><label>Start delay (s)</label><input id="spotifyStartDelay" type="number" min="0" max="10" step="0.05"></div>
+            <div class="field"><label>Position offset (s)</label><input id="spotifyOffset" type="number" min="-30" max="30" step="0.25"></div>
             <div class="field"><label>Active RMS</label><input id="activityThreshold" type="number" min="0.00001" max="0.1" step="0.0001"></div>
             <div class="field"><label>Silence RMS</label><input id="silenceThreshold" type="number" min="0.00001" max="0.1" step="0.0001"></div>
             <div class="field"><label>Lead-in silence (s)</label><input id="leadInSilenceSeconds" type="number" min="0.05" max="5" step="0.05"></div>
             <div class="field"><label>Gap seconds</label><input id="transitionSilenceSeconds" type="number" min="0.2" max="10" step="0.1"></div>
             <div class="field"><label>Boundary window (s)</label><input id="transitionWindowSeconds" type="number" min="1" max="120" step="1"></div>
           </div>
-          <div class="caption">Needle drop is ignored until lead-in silence is seen; later gaps wait for vinyl audio to return before starting Spotify.</div>
+          <div class="caption">Start delay waits before firing Spotify. Position offset seeks into the Spotify track. Needle drop is ignored until lead-in silence is seen.</div>
           <div class="settings-actions"><button class="secondary" onclick="resetSettings()">Reset</button><button class="primary" onclick="saveSyncSettings()">Save settings</button></div>
         </aside>
       </main>
@@ -1921,12 +1945,12 @@ func pageHTML() -> String {
         }
         async function saveSyncSettings() {
           const value = (id) => Number(document.getElementById(id).value || 0);
-          const response = await fetch('/sync/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spotifyOffsetSeconds: value('spotifyOffset'), activityThreshold: value('activityThreshold'), silenceThreshold: value('silenceThreshold'), leadInSilenceSeconds: value('leadInSilenceSeconds'), transitionSilenceSeconds: value('transitionSilenceSeconds'), transitionWindowSeconds: value('transitionWindowSeconds') }) });
+          const response = await fetch('/sync/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spotifyOffsetSeconds: value('spotifyOffset'), spotifyStartDelaySeconds: value('spotifyStartDelay'), activityThreshold: value('activityThreshold'), silenceThreshold: value('silenceThreshold'), leadInSilenceSeconds: value('leadInSilenceSeconds'), transitionSilenceSeconds: value('transitionSilenceSeconds'), transitionWindowSeconds: value('transitionWindowSeconds') }) });
           if (!response.ok) alert((await response.json().catch(() => ({ error: 'Could not save settings.' }))).error || 'Could not save settings.');
           await tick();
         }
         async function resetSettings() {
-          const defaults = { spotifyOffset: 0, activityThreshold: 0.001, silenceThreshold: 0.00045, leadInSilenceSeconds: 0.45, transitionSilenceSeconds: 1.6, transitionWindowSeconds: 35 };
+          const defaults = { spotifyOffset: 0, spotifyStartDelay: 0, activityThreshold: 0.001, silenceThreshold: 0.00045, leadInSilenceSeconds: 0.45, transitionSilenceSeconds: 1.6, transitionWindowSeconds: 35 };
           for (const [id, value] of Object.entries(defaults)) document.getElementById(id).value = value;
           await saveSyncSettings();
         }
@@ -2010,7 +2034,7 @@ func pageHTML() -> String {
           tracks.forEach((track, index) => { const row = document.createElement('div'); row.className = `track-row ${index === activeIndex ? 'active' : ''}`; row.innerHTML = `<div class="trk-num">${track.position || String(index + 1).padStart(2, '0')}</div><div class="trk-title">${track.title}</div><div class="trk-time">${fmt(track.durationSeconds)}</div>`; list.append(row); });
         }
         function applySettings(settings) {
-          const values = { spotifyOffset: settings.spotifyOffsetSeconds ?? 0, activityThreshold: settings.activityThreshold ?? 0.001, silenceThreshold: settings.silenceThreshold ?? 0.00045, leadInSilenceSeconds: settings.leadInSilenceSeconds ?? 0.45, transitionSilenceSeconds: settings.transitionSilenceSeconds ?? 1.6, transitionWindowSeconds: settings.transitionWindowSeconds ?? 35 };
+          const values = { spotifyOffset: settings.spotifyOffsetSeconds ?? 0, spotifyStartDelay: settings.spotifyStartDelaySeconds ?? 0, activityThreshold: settings.activityThreshold ?? 0.001, silenceThreshold: settings.silenceThreshold ?? 0.00045, leadInSilenceSeconds: settings.leadInSilenceSeconds ?? 0.45, transitionSilenceSeconds: settings.transitionSilenceSeconds ?? 1.6, transitionWindowSeconds: settings.transitionWindowSeconds ?? 35 };
           for (const [id, value] of Object.entries(values)) { const input = document.getElementById(id); if (document.activeElement !== input) input.value = id.includes('Threshold') ? Number(value).toFixed(5) : Number(value).toFixed(2); }
         }
         async function tick() {
