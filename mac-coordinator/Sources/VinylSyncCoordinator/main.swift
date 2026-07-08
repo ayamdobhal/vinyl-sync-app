@@ -1678,16 +1678,18 @@ func pageHTML() -> String {
         .release-title { font-size: 13px; font-weight: 500; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .release-title span { color: var(--sub); font-weight: 400; }
         .caret { font-size: 9px; color: var(--sub); }
-        .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 300px; max-height: 520px; overflow: auto; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
+        .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 300px; max-height: 520px; overflow-y: auto; overflow-x: hidden; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
         .dropdown.open { display: block; }
         .disc-search { position: sticky; top: 0; z-index: 2; background: var(--card); padding: 4px 4px 8px; }
         .disc-search input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; outline: none; }
         .disc-search input:focus { border-color: var(--hbd); }
-        .release-row { display: flex; align-items: center; gap: 10px; padding: 7px; border-radius: 7px; cursor: pointer; }
+        .release-row { display: flex; align-items: center; gap: 10px; padding: 7px; border-radius: 7px; cursor: pointer; min-width: 0; }
         .release-row:hover { background: var(--p2); }
         .release-row.selected { background: var(--accSoft); }
         .row-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .row-meta { font-size: 11px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-copy { flex: 1; min-width: 0; overflow: hidden; }
+        .selected-mark { flex: none; width: 10px; text-align: center; }
         .drop-footer { padding: 8px 10px 6px; border-top: 1px solid var(--bd); margin-top: 4px; display: flex; justify-content: space-between; align-items: center; }
         .linkish { border: 0; background: transparent; color: var(--sub); padding: 0; font-size: 11.5px; }
         .linkish:hover { color: var(--acc); }
@@ -2004,7 +2006,7 @@ func pageHTML() -> String {
             const row = document.createElement('div');
             row.className = `release-row ${Number(release.id) === Number(selectedReleaseId) ? 'selected' : ''}`;
             row.onclick = () => loadDiscogsRelease(release.id);
-            row.innerHTML = `<div class="art-sm">${artHTML(release.thumb)}</div><div style="flex:1;min-width:0"><div class="row-title">${release.title}</div><div class="row-meta">${release.artists || ''} · ${release.year || ''}</div></div><div class="accent">${Number(release.id) === Number(selectedReleaseId) ? '●' : ''}</div>`;
+            row.innerHTML = `<div class="art-sm">${artHTML(release.thumb)}</div><div class="row-copy"><div class="row-title">${release.title}</div><div class="row-meta">${release.artists || ''} · ${release.year || ''}</div></div><div class="accent selected-mark">${Number(release.id) === Number(selectedReleaseId) ? '●' : ''}</div>`;
             rows.append(row);
           }
           document.getElementById('collectionCount').textContent = query ? `${filtered.length} / ${releases.length} releases` : `${releases.length} releases`;
