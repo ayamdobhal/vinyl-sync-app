@@ -1586,540 +1586,393 @@ func pageHTML() -> String {
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>Vinyl Sync</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
       <style>
-        :root { font-family: system-ui, sans-serif; color: #1f2328; background: #f6f2eb; }
+        :root {
+          --bg: #f7f8f9; --card: #ffffff; --bd: #e5e8ec; --tx: #16181d; --sub: #6b7280; --ft: #a5adb8;
+          --p2: #fafbfc; --tk: #eceff2; --gn: #16a34a; --gnt: #15803d; --gnb: #e8f5ee;
+          --rd: #dc2626; --pu: #7c6fd0; --gy: #8a929c; --hbd: #c3cad3; --btn: #16181d; --btnTx: #fff;
+          --acc: #d6437f; --accSoft: rgba(214, 67, 127, 0.11);
+          color-scheme: light;
+        }
+        :root[data-theme="dark"] {
+          --bg: #101215; --card: #17191d; --bd: #262a30; --tx: #edeef0; --sub: #9aa1ab; --ft: #5c636d;
+          --p2: #101215; --tk: #262a30; --gn: #34c374; --gnt: #34c374; --gnb: rgba(52,195,116,0.13);
+          --rd: #ef6b5e; --pu: #9a8fd0; --gy: #7d848e; --hbd: #3a4048; --btn: #edeef0; --btnTx: #101215;
+          --accSoft: rgba(214, 67, 127, 0.16);
+          color-scheme: dark;
+        }
         * { box-sizing: border-box; }
-        body { margin: 0; padding: 24px; }
-        main { max-width: 1120px; margin: 0 auto; }
-        h1 { margin: 0 0 18px; font-size: 32px; }
-        h2 { margin: 0 0 12px; font-size: 18px; }
-        .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-        .panel { border: 1px solid #d8cdc0; border-radius: 8px; background: #fffaf3; padding: 16px; }
-        .row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-bottom: 1px solid #eee2d6; }
-        .row:last-child { border-bottom: 0; }
-        .label { color: #6b6258; }
-        .value { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
-        .rms-graph { width: 100%; height: 92px; display: block; border: 1px solid #d8cdc0; border-radius: 6px; background: #fff; margin-top: 10px; }
-        .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-        button { border: 1px solid #1f2328; background: #1f2328; color: white; border-radius: 6px; padding: 9px 12px; font: inherit; cursor: pointer; }
-        button.secondary { background: transparent; color: #1f2328; }
-        input { width: 100%; border: 1px solid #d8cdc0; border-radius: 6px; padding: 10px; font: inherit; background: #fff; color: #1f2328; }
-        .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
-        .field-label { display: grid; gap: 4px; color: #6b6258; font-size: 12px; }
-        .field-label input { font-size: 14px; }
-        textarea { width: 100%; min-height: 220px; resize: vertical; border: 1px solid #d8cdc0; border-radius: 6px; padding: 10px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: #fff; color: #1f2328; }
-        .timeline { margin-top: 12px; height: 16px; border-radius: 999px; overflow: hidden; background: #e3d7ca; }
-        .progress { height: 100%; width: 0%; background: #8d3f2f; transition: width 160ms linear; }
-        .hint { color: #6b6258; font-size: 13px; margin-top: 8px; }
-        .results { display: grid; gap: 8px; margin-top: 12px; }
-        .result { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid #eee2d6; border-radius: 8px; padding: 8px; background: #fff; }
-        .result img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: #e3d7ca; }
-        .result-title { font-weight: 700; overflow-wrap: anywhere; }
-        .result-meta { color: #6b6258; font-size: 12px; }
-        .profile { display: flex; gap: 10px; align-items: center; padding: 8px 0 12px; }
-        .avatar { width: 42px; height: 42px; border-radius: 50%; object-fit: cover; background: #e3d7ca; border: 1px solid #d8cdc0; }
-        .profile-name { font-weight: 700; }
-        .profile-state { color: #2d6a5f; font-size: 13px; }
-        .album { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 14px; align-items: start; }
-        .album-cover { width: 92px; height: 92px; border-radius: 6px; object-fit: cover; background: #e3d7ca; border: 1px solid #d8cdc0; }
-        .album-title { font-weight: 800; font-size: 17px; overflow-wrap: anywhere; }
-        .album-meta { color: #6b6258; font-size: 13px; margin-top: 3px; }
-        .side-tabs { display: flex; gap: 8px; margin-top: 12px; }
-        .side-tabs button { min-width: 46px; }
-        .side-tabs button.active { background: #8d3f2f; border-color: #8d3f2f; color: #fff; }
-        .track-list { display: grid; gap: 6px; margin-top: 12px; }
-        .track-item { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border: 1px solid #eee2d6; border-radius: 6px; background: #fff; }
-        .track-index { color: #6b6258; font-variant-numeric: tabular-nums; }
-        .track-title { font-weight: 650; overflow-wrap: anywhere; }
-        .track-time { color: #6b6258; font-variant-numeric: tabular-nums; }
-        details { margin-top: 12px; }
-        summary { cursor: pointer; color: #6b6258; }
-        @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } body { padding: 14px; } }
+        body { margin: 0; background: var(--bg); color: var(--tx); font-family: 'Space Grotesk', system-ui, sans-serif; }
+        button, input, select { font: inherit; color: inherit; }
+        button { cursor: pointer; }
+        .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+        .header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 18px; padding: 12px 24px; background: var(--card); border-bottom: 1px solid var(--bd); }
+        .logo { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
+        .logo span, .accent { color: var(--acc); }
+        .release-wrap { position: relative; }
+        .chip { display: flex; align-items: center; gap: 9px; padding: 5px 12px 5px 6px; background: var(--bg); border: 1px solid var(--bd); border-radius: 8px; cursor: pointer; min-height: 40px; }
+        .chip:hover, .outline:hover { border-color: var(--hbd); }
+        .art-sm, .art-md, .art-xl { flex: none; border-radius: 4px; background: repeating-linear-gradient(45deg,var(--tk),var(--tk) 3px,var(--p2) 3px,var(--p2) 6px); object-fit: cover; display: grid; place-items: center; font: 500 7px 'IBM Plex Mono', monospace; color: var(--gy); overflow: hidden; }
+        .art-sm { width: 28px; height: 28px; } .art-md { width: 40px; height: 40px; border-radius: 6px; } .art-xl { width: 100%; aspect-ratio: 1; border-radius: 8px; font-size: 10px; }
+        .art-sm img, .art-md img, .art-xl img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .release-title { font-size: 13px; font-weight: 500; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .release-title span { color: var(--sub); font-weight: 400; }
+        .caret { font-size: 9px; color: var(--sub); }
+        .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 300px; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
+        .dropdown.open { display: block; }
+        .release-row { display: flex; align-items: center; gap: 10px; padding: 7px; border-radius: 7px; cursor: pointer; }
+        .release-row:hover { background: var(--p2); }
+        .release-row.selected { background: var(--accSoft); }
+        .row-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .row-meta { font-size: 11px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .drop-footer { padding: 8px 10px 6px; border-top: 1px solid var(--bd); margin-top: 4px; display: flex; justify-content: space-between; align-items: center; }
+        .linkish { border: 0; background: transparent; color: var(--sub); padding: 0; font-size: 11.5px; }
+        .linkish:hover { color: var(--acc); }
+        .now-header { display: flex; align-items: center; gap: 12px; margin: 0 auto; }
+        .now-copy { display: flex; flex-direction: column; gap: 5px; width: 300px; min-width: 0; }
+        .now-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+        .now-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .now-sub { font-size: 11.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .progress-row { display: flex; align-items: center; gap: 8px; }
+        .time { font: 500 10px 'IBM Plex Mono', monospace; color: var(--sub); }
+        .mini-progress, .progress { position: relative; overflow: hidden; background: var(--tk); border-radius: 3px; }
+        .mini-progress { flex: 1; height: 3px; } .progress { height: 5px; }
+        .fill { height: 100%; width: 0%; background: var(--acc); border-radius: inherit; }
+        .spotify-chip { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 6px; background: var(--bg); border: 1px solid var(--bd); border-radius: 99px; cursor: pointer; }
+        .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--tx); color: var(--card); display: grid; place-items: center; font-size: 9px; font-weight: 600; overflow: hidden; }
+        .avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gn); }
+        .dot.bad { background: var(--rd); }
+        .spotify-name { font-size: 12px; font-weight: 500; }
+        .theme-toggle { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 1.5px solid var(--tx); background: linear-gradient(90deg,var(--tx) 50%,transparent 50%); cursor: pointer; }
+        .outline { padding: 6px 13px; border: 1px solid var(--bd); border-radius: 8px; background: var(--card); font-size: 12.5px; font-weight: 500; }
+        .layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 18px 24px 28px; max-width: 1400px; margin: 0 auto; }
+        .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+        .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .card { background: var(--card); border: 1px solid var(--bd); border-radius: 12px; padding: 16px 18px; }
+        .card-title { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; font-size: 15px; font-weight: 600; }
+        .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 99px; background: var(--gnb); color: var(--gnt); font-size: 11px; font-weight: 600; }
+        .badge.run { color: var(--acc); background: var(--accSoft); }
+        .badge.bad { color: var(--rd); background: rgba(220,38,38,0.12); }
+        .device { margin-left: auto; display: flex; gap: 8px; align-items: center; min-width: 0; }
+        .device-name { font-size: 12px; color: var(--sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .khz { padding: 3px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--bd); font: 500 10.5px 'IBM Plex Mono', monospace; }
+        .chart-panel { border: 1px solid var(--bd); border-radius: 10px; background: var(--p2); padding: 10px 12px 6px; }
+        .chart-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; }
+        .chart-label { font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: 0.08em; color: var(--sub); }
+        .chart-value { font: 500 12px 'IBM Plex Mono', monospace; color: var(--acc); }
+        .chart-frames { margin-left: auto; font: 500 10px 'IBM Plex Mono', monospace; color: var(--sub); }
+        .rms-canvas { width: 100%; height: 96px; display: block; }
+        .axis { display: flex; justify-content: space-between; font: 400 9px 'IBM Plex Mono', monospace; color: var(--ft); margin-top: 2px; }
+        .stat-list { display: flex; flex-direction: column; gap: 10px; }
+        .stat { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+        .stat span:first-child { color: var(--sub); }
+        .stat strong { font: 500 12px 'IBM Plex Mono', monospace; text-align: right; }
+        .good { color: var(--gnt); }
+        .track-ref { font-size: 11.5px; color: var(--sub); }
+        .actions { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+        .primary { border: 0; border-radius: 8px; padding: 7px 14px; background: var(--acc); color: #fff; font-size: 12.5px; font-weight: 600; }
+        .secondary { border: 1px solid var(--bd); border-radius: 8px; padding: 7px 14px; background: var(--card); font-size: 12.5px; font-weight: 500; }
+        .secondary:hover { border-color: var(--hbd); }
+        .events { border-left: 2px solid var(--tk); margin-left: 5px; }
+        .event { position: relative; padding: 0 0 14px 18px; display: flex; align-items: baseline; gap: 10px; }
+        .event:before { content: ''; position: absolute; left: -5px; top: 3px; width: 8px; height: 8px; border-radius: 50%; background: var(--gy); box-shadow: 0 0 0 3px var(--card); }
+        .event.spotify:before, .event.track:before { background: var(--gn); } .event.needle:before { background: var(--acc); } .event.settings:before { background: var(--pu); } .event.error:before { background: var(--rd); }
+        .event-time { font: 500 10.5px 'IBM Plex Mono', monospace; color: var(--sub); }
+        .event-type { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--gy); text-transform: uppercase; }
+        .event.spotify .event-type, .event.track .event-type { color: var(--gn); } .event.needle .event-type { color: var(--acc); } .event.settings .event-type { color: var(--pu); } .event.error .event-type { color: var(--rd); }
+        .event-msg { font-size: 12.5px; }
+        .sidebar { position: sticky; top: 76px; align-self: start; padding: 16px; }
+        .disc-title { margin-top: 12px; font-size: 17px; font-weight: 600; }
+        .disc-meta { margin-top: 4px; font-size: 12px; color: var(--sub); }
+        .side-pills { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+        .side-pill { width: 32px; height: 32px; border-radius: 7px; border: 1px solid var(--bd); background: var(--card); font-weight: 500; }
+        .side-pill.active { background: var(--acc); border-color: var(--acc); color: #fff; font-weight: 600; }
+        .track-list { display: grid; gap: 2px; margin: 8px 0 14px; }
+        .track-row { display: grid; grid-template-columns: 36px minmax(0,1fr) auto; gap: 10px; align-items: baseline; padding: 9px 10px; border-radius: 7px; }
+        .track-row.active { background: var(--accSoft); }
+        .trk-num { font: 500 10.5px 'IBM Plex Mono', monospace; color: var(--ft); } .track-row.active .trk-num { color: var(--acc); }
+        .trk-title { font-size: 13px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .track-row.active .trk-title { font-weight: 600; }
+        .trk-time { font: 500 11px 'IBM Plex Mono', monospace; color: var(--sub); } .track-row.active .trk-time { color: var(--acc); }
+        .use-side { width: 100%; border: 0; border-radius: 8px; padding: 9px 0; background: var(--btn); color: var(--btnTx); font-size: 13px; font-weight: 600; }
+        .caption { margin-top: 10px; font-size: 10.5px; color: var(--ft); line-height: 1.4; }
+        .modal-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(10,12,16,0.45); display: none; align-items: center; justify-content: center; padding: 24px; }
+        .modal-backdrop.open { display: flex; }
+        .modal { width: min(480px, 100%); background: var(--card); border: 1px solid var(--bd); border-radius: 14px; padding: 20px 22px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
+        .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+        .modal-title { font-size: 16px; font-weight: 600; }
+        .close { border: 0; background: transparent; color: var(--sub); font-size: 18px; padding: 0; }
+        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+        .field { display: grid; gap: 6px; }
+        .field label { font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
+        .field input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px; font: 500 12.5px 'IBM Plex Mono', monospace; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+        @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } .sidebar { position: static; } .now-header { display: none; } }
       </style>
     </head>
     <body>
-      <main>
-        <h1>Vinyl Sync</h1>
-        <section class="grid">
-          <div class="panel">
-            <h2>Audio</h2>
-            <div class="row"><span class="label">Stream</span><span class="value" id="connected">--</span></div>
-            <div class="row"><span class="label">Input</span><span class="value" id="device">--</span></div>
-            <div class="row"><span class="label">Sample rate</span><span class="value" id="sampleRate">--</span></div>
-            <div class="row"><span class="label">Frames</span><span class="value" id="frames">--</span></div>
-            <div class="row"><span class="label">RMS</span><span class="value" id="rmsValue">--</span></div>
-            <canvas class="rms-graph" id="rmsGraph"></canvas>
+      <header class="header">
+        <div class="logo">Vinyl Sync<span>.</span></div>
+        <div class="release-wrap">
+          <div class="chip" id="releaseChip" onclick="toggleDropdown()">
+            <div class="art-sm" id="chipArt">art</div>
+            <div class="release-title"><span id="chipTitle">Loading collection</span> <span id="chipArtist"></span></div>
+            <div class="caret">▾</div>
           </div>
-
-          <div class="panel">
-            <h2>Sync</h2>
-            <div class="row"><span class="label">Mode</span><span class="value" id="mode">--</span></div>
-            <div class="row"><span class="label">Event</span><span class="value" id="event">--</span></div>
-            <div class="row"><span class="label">Audio active</span><span class="value" id="active">--</span></div>
-            <div class="row"><span class="label">Silence</span><span class="value" id="silence">--</span></div>
-            <div class="row"><span class="label">Side elapsed</span><span class="value" id="sideElapsed">--</span></div>
-            <div class="row"><span class="label">Needle drop</span><span class="value" id="needleDrop">--</span></div>
-            <div class="row"><span class="label">Spotify offset</span><span class="value" id="spotifyOffsetLabel">--</span></div>
-            <div class="settings-grid">
-              <label class="field-label">Spotify offset <input id="spotifyOffset" type="number" min="-30" max="30" step="0.25" value="0"></label>
-              <label class="field-label">Active RMS <input id="activityThreshold" type="number" min="0.00001" max="0.1" step="0.0001" value="0.001"></label>
-              <label class="field-label">Silence RMS <input id="silenceThreshold" type="number" min="0.00001" max="0.1" step="0.0001" value="0.00045"></label>
-              <label class="field-label">Lead-in silence <input id="leadInSilenceSeconds" type="number" min="0.05" max="5" step="0.05" value="0.45"></label>
-              <label class="field-label">Gap seconds <input id="transitionSilenceSeconds" type="number" min="0.2" max="10" step="0.1" value="1.6"></label>
-              <label class="field-label">Boundary window <input id="transitionWindowSeconds" type="number" min="1" max="120" step="1" value="35"></label>
-            </div>
-            <div class="controls">
-              <button onclick="post('/sync/arm')">Arm</button>
-              <button class="secondary" onclick="post('/sync/next')">Next track</button>
-              <button class="secondary" onclick="post('/spotify/play-current')">Play current muted</button>
-              <button class="secondary" onclick="nudgeOffset(-1)">-1s</button>
-              <button class="secondary" onclick="nudgeOffset(1)">+1s</button>
-              <button class="secondary" onclick="saveSyncSettings()">Save settings</button>
-              <button class="secondary" onclick="post('/sync/reset')">Reset</button>
-            </div>
-            <div class="hint">Needle drop is ignored until lead-in silence is seen; later gaps wait for vinyl audio to return before starting Spotify.</div>
+          <div class="dropdown" id="releaseDropdown">
+            <div id="releaseRows"></div>
+            <div class="drop-footer"><button class="linkish" onclick="loadDiscogsCollection(event)">Refresh collection</button><div class="mono" id="collectionCount">0 releases</div></div>
           </div>
-
-          <div class="panel">
-            <h2>Spotify</h2>
-            <div class="profile" id="spotifyProfile" hidden>
-              <img class="avatar" id="spotifyAvatar" alt="">
-              <div>
-                <div class="profile-name" id="spotifyProfileName">--</div>
-                <div class="profile-state">Connected</div>
+        </div>
+        <div class="now-header">
+          <div class="art-md" id="nowArt">art</div>
+          <div class="now-copy">
+            <div class="now-line"><div class="now-title" id="nowTitle">--</div><div class="now-sub" id="nowSub">--</div></div>
+            <div class="progress-row"><div class="time" id="nowElapsed">0:00</div><div class="mini-progress"><div class="fill" id="nowFill"></div></div><div class="time" id="nowDur">0:00</div></div>
+          </div>
+        </div>
+        <div class="spotify-chip" id="spotifyChip" onclick="connectSpotifyIfNeeded()" title="Spotify">
+          <div class="avatar" id="spotifyAvatar">--</div><div class="dot" id="spotifyDot"></div><div class="spotify-name" id="spotifyName">Spotify</div>
+        </div>
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme"></button>
+        <button class="outline" onclick="openSettings()">Settings</button>
+      </header>
+      <main class="layout">
+        <section class="stack">
+          <div class="card">
+            <div class="card-title"><span>Audio stream</span><span class="badge" id="streamBadge"><span class="dot"></span>Waiting</span><div class="device"><div class="device-name" id="deviceName">none</div><div class="khz" id="khz">-- kHz</div></div></div>
+            <div class="chart-panel">
+              <div class="chart-head"><div class="chart-label">RMS</div><div class="chart-value" id="rmsValue">0.00000</div><div class="chart-frames" id="framesLabel">frames 0</div></div>
+              <canvas class="rms-canvas" id="rmsGraph"></canvas>
+              <div class="axis"><span>-120 s</span><span id="silenceAxis">silence threshold 0.00045</span><span>now</span></div>
+            </div>
+          </div>
+          <div class="split">
+            <div class="card">
+              <div class="card-title"><span>Album sync</span><span class="badge run" id="modeBadge">Idle</span></div>
+              <div class="stat-list">
+                <div class="stat"><span>Side elapsed</span><strong><span id="sideElapsed">0:00</span> / <span id="sideTotal">0:00</span></strong></div>
+                <div class="progress"><div class="fill" id="sideFill"></div></div>
+                <div class="stat"><span>Needle drop</span><strong id="needleDrop">--</strong></div>
+                <div class="stat"><span>Silence</span><strong id="silence">0.0 s</strong></div>
+                <div class="stat"><span>Audio active</span><strong id="active">no</strong></div>
               </div>
             </div>
-            <div class="row"><span class="label">Auth</span><span class="value" id="spotifyAuth">--</span></div>
-            <div class="row"><span class="label">User</span><span class="value" id="spotifyUser">--</span></div>
-            <div class="row"><span class="label">Target</span><span class="value" id="spotifyTarget">--</span></div>
-            <div class="row"><span class="label">Redirect</span><span class="value" id="spotifyRedirect">--</span></div>
-            <div class="row"><span class="label">Action</span><span class="value" id="spotifyAction">--</span></div>
-            <div class="row"><span class="label">Error</span><span class="value" id="spotifyError">--</span></div>
-            <div class="controls">
-              <button onclick="window.location.href='/spotify/login'">Connect to Spotify</button>
-            </div>
-            <div class="hint">Open this page from the Mac at 127.0.0.1 for Spotify OAuth. PC control works after auth.</div>
-          </div>
-
-          <div class="panel">
-            <h2>Discogs Collection</h2>
-            <select id="discogsSelect"></select>
-            <div class="controls">
-              <button onclick="loadDiscogsCollection()">Refresh collection</button>
-              <button class="secondary" onclick="loadDiscogsRelease()">Load selected disc</button>
-            </div>
-            <div class="hint" id="discogsHint">Uses your Discogs collection for real side splits.</div>
-          </div>
-
-          <div class="panel">
-            <h2>Selected Disc</h2>
-            <div class="album">
-              <img class="album-cover" id="albumCover" alt="">
-              <div>
-                <div class="album-title" id="albumTitle">No disc selected</div>
-                <div class="album-meta" id="albumMeta">Select a disc from your Discogs collection.</div>
-                <div class="side-tabs" id="sideTabs"></div>
+            <div class="card">
+              <div class="card-title"><span>Track sync</span><span class="track-ref" id="trackRef">--</span></div>
+              <div class="stat-list">
+                <div class="stat"><span>Track elapsed</span><strong id="trackElapsed">0:00</strong></div>
+                <div class="stat"><span>Est. remaining</span><strong id="trackRemaining">0:00</strong></div>
+                <div class="stat"><span>Spotify offset</span><strong class="accent" id="offsetLabel">+0.00 s</strong></div>
+                <div class="stat"><span>Next</span><strong id="nextTrack">--</strong></div>
+                <div class="actions"><button class="primary" onclick="post('/sync/arm')">Arm</button><button class="secondary" onclick="post('/sync/next')">Next track</button><button class="secondary" onclick="post('/spotify/play-current')">Play muted</button></div>
               </div>
             </div>
-            <div class="track-list" id="sideTracks"></div>
-            <div class="controls">
-              <button onclick="saveSelectedSide()">Use side</button>
-              <button class="secondary" onclick="loadTemplate()">Load A Thousand Suns A</button>
-            </div>
-            <div class="hint">Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.</div>
-            <details>
-              <summary>Raw side JSON</summary>
-              <textarea id="sideJson" spellcheck="false"></textarea>
-              <div class="controls">
-                <button onclick="saveSide()">Save JSON side</button>
-              </div>
-            </details>
           </div>
-
-          <div class="panel">
-            <h2>Now</h2>
-            <div class="row"><span class="label">Side</span><span class="value" id="sideName">--</span></div>
-            <div class="row"><span class="label">Track</span><span class="value" id="track">--</span></div>
-            <div class="row"><span class="label">Track elapsed</span><span class="value" id="trackElapsed">--</span></div>
-            <div class="row"><span class="label">Remaining</span><span class="value" id="trackRemaining">--</span></div>
-            <div class="row"><span class="label">Next</span><span class="value" id="nextTrack">--</span></div>
-            <div class="timeline"><div class="progress" id="progress"></div></div>
+          <div class="card">
+            <div class="card-title">Events</div>
+            <div class="events" id="events"></div>
           </div>
         </section>
+        <aside class="card sidebar">
+          <div class="art-xl" id="discArt">art</div>
+          <div class="disc-title" id="discTitle">No disc selected</div>
+          <div class="disc-meta" id="discMeta">Select a release from Discogs</div>
+          <div class="side-pills" id="sidePills"></div>
+          <div class="track-list" id="trackList"></div>
+          <button class="use-side" onclick="saveSelectedSide()">Use this side</button>
+          <div class="caption" id="discCaption">Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.</div>
+        </aside>
       </main>
+      <div class="modal-backdrop" id="settingsBackdrop" onclick="closeSettings(event)">
+        <div class="modal" onclick="event.stopPropagation()">
+          <div class="modal-head"><div class="modal-title">Sync settings</div><button class="close" onclick="closeSettings()">✕</button></div>
+          <div class="settings-grid">
+            <div class="field"><label>Spotify offset (s)</label><input id="spotifyOffset" type="number" min="-30" max="30" step="0.25"></div>
+            <div class="field"><label>Active RMS</label><input id="activityThreshold" type="number" min="0.00001" max="0.1" step="0.0001"></div>
+            <div class="field"><label>Silence RMS</label><input id="silenceThreshold" type="number" min="0.00001" max="0.1" step="0.0001"></div>
+            <div class="field"><label>Lead-in silence (s)</label><input id="leadInSilenceSeconds" type="number" min="0.05" max="5" step="0.05"></div>
+            <div class="field"><label>Gap seconds</label><input id="transitionSilenceSeconds" type="number" min="0.2" max="10" step="0.1"></div>
+            <div class="field"><label>Boundary window (s)</label><input id="transitionWindowSeconds" type="number" min="1" max="120" step="1"></div>
+          </div>
+          <div class="caption">Needle drop is ignored until lead-in silence is seen; later gaps wait for vinyl audio to return before starting Spotify.</div>
+          <div class="modal-actions"><button class="secondary" onclick="resetSettings()">Reset</button><button class="primary" onclick="saveSyncSettings(); closeSettings()">Save settings</button></div>
+        </div>
+      </div>
       <script>
-        const template = {
-          name: 'A Thousand Suns - Side A',
-          artists: 'Linkin Park',
-          image: '',
-          sideOrder: ['A'],
-          sides: {
-            A: [
-              { position: 'A1', title: 'The Requiem', durationSeconds: 121, uri: '' },
-              { position: 'A2', title: 'The Radiance', durationSeconds: 57, uri: '' },
-              { position: 'A3', title: 'Burning in the Skies', durationSeconds: 253, uri: '' },
-              { position: 'A4', title: 'Empty Spaces', durationSeconds: 18, uri: '' },
-              { position: 'A5', title: 'When They Come for Me', durationSeconds: 293, uri: '' },
-              { position: 'A6', title: 'Robot Boy', durationSeconds: 269, uri: '' }
-            ]
-          },
-          tracks: [
-            { position: 'A1', title: 'The Requiem', durationSeconds: 121, uri: '' },
-            { position: 'A2', title: 'The Radiance', durationSeconds: 57, uri: '' },
-            { position: 'A3', title: 'Burning in the Skies', durationSeconds: 253, uri: '' },
-            { position: 'A4', title: 'Empty Spaces', durationSeconds: 18, uri: '' },
-            { position: 'A5', title: 'When They Come for Me', durationSeconds: 293, uri: '' },
-            { position: 'A6', title: 'Robot Boy', durationSeconds: 269, uri: '' }
-          ]
-        };
-        let activeAlbum = template;
+        let releases = [];
+        let activeAlbum = null;
         let selectedSide = 'A';
+        let selectedReleaseId = null;
+        let lastStatus = null;
         const rmsHistory = [];
+        const eventLog = [];
+        let lastEvent = '';
+        const accents = ['#d6437f', '#0f766e', '#4655d4', '#c2503a', '#7048c8'];
 
+        function initTheme() {
+          const stored = localStorage.getItem('vinylsync-theme');
+          const theme = stored || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.setProperty('--acc', localStorage.getItem('vinylsync-accent') || accents[0]);
+        }
+        function toggleTheme() {
+          const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+          document.documentElement.dataset.theme = next;
+          localStorage.setItem('vinylsync-theme', next);
+          drawRmsGraph(Number(lastStatus?.rms || 0), lastStatus?.settings || {});
+        }
         function fmt(seconds) {
           const value = Math.max(0, Number(seconds || 0));
           const mins = Math.floor(value / 60);
           const secs = Math.floor(value % 60).toString().padStart(2, '0');
           return `${mins}:${secs}`;
         }
-
-        function sideDuration(side) {
-          return (side.tracks || []).reduce((sum, track) => sum + Number(track.durationSeconds || 0), 0);
+        function sideDuration(side) { return (side.tracks || []).reduce((sum, track) => sum + Number(track.durationSeconds || 0), 0); }
+        function getAlbumSides(album) { return album?.sides || { A: album?.tracks || [] }; }
+        function getSideKeys(album) { const sides = getAlbumSides(album); return (album?.sideOrder || Object.keys(sides).sort()).filter((key) => (sides[key] || []).length); }
+        function selectedTracks() { return (getAlbumSides(activeAlbum)[selectedSide] || []); }
+        function sidePlanFromAlbum(album, sideKey) { return { name: `${album?.artists ? album.artists + ' - ' : ''}${album?.name || 'Selected disc'} - Side ${sideKey}`, tracks: getAlbumSides(album)[sideKey] || [] }; }
+        function artHTML(src, label = 'art') { return src ? `<img src="${src}" alt="">` : label; }
+        function firstName(name) { return String(name || 'Spotify').split(' ')[0] || 'Spotify'; }
+        function initials(name) { return String(name || '--').split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase() || '--'; }
+        function classifyEvent(event) {
+          const value = String(event || '').toLowerCase();
+          if (value.includes('spotify') || value.includes('play')) return 'spotify';
+          if (value.includes('needle') || value.includes('first track')) return 'needle';
+          if (value.includes('track') || value.includes('timeline')) return 'track';
+          if (value.includes('silence') || value.includes('waiting')) return 'silence';
+          if (value.includes('setting')) return 'settings';
+          if (value.includes('error') || value.includes('no spotify')) return 'error';
+          return 'silence';
         }
-
-        function inferredAlbumSides(album) {
-          const tracks = album.tracks || [];
-          if (tracks.length <= 1) return { A: tracks, B: [] };
-          const total = sideDuration(album);
-          const half = total / 2;
-          let elapsed = 0;
-          let splitIndex = tracks.length;
-          for (let index = 0; index < tracks.length - 1; index++) {
-            elapsed += Number(tracks[index].durationSeconds || 0);
-            if (elapsed >= half) {
-              splitIndex = index + 1;
-              break;
-            }
-          }
-          return {
-            A: tracks.slice(0, splitIndex),
-            B: tracks.slice(splitIndex)
-          };
+        function pushEvent(event) {
+          if (!event || event === lastEvent) return;
+          lastEvent = event;
+          eventLog.unshift({ event, type: classifyEvent(event), at: new Date() });
+          eventLog.splice(8);
+          renderEvents();
         }
-
-        function getAlbumSides(album) {
-          if (album.sides) return album.sides;
-          return inferredAlbumSides(album);
-        }
-
-        function getSideKeys(album) {
-          const sides = getAlbumSides(album);
-          const keys = album.sideOrder || Object.keys(sides).sort();
-          return keys.filter((key) => (sides[key] || []).length);
-        }
-
-        function sidePlanFromAlbum(album, sideKey) {
-          const sides = getAlbumSides(album);
-          const tracks = sides[sideKey] || [];
-          return {
-            name: `${album.artists ? album.artists + ' - ' : ''}${album.name} - Side ${sideKey}`,
-            tracks
-          };
-        }
-
-        function renderLoadedAlbum() {
-          const album = activeAlbum || { name: 'No disc selected', artists: '', image: '', tracks: [] };
-          const sides = getAlbumSides(album);
-          const keys = getSideKeys(album);
-          if (!keys.includes(selectedSide) && keys.length) selectedSide = keys[0];
-          const tracks = sides[selectedSide] || [];
-          document.getElementById('albumTitle').textContent = album.name || 'No disc selected';
-          document.getElementById('albumMeta').textContent = [
-            album.artists,
-            `${tracks.length} track${tracks.length === 1 ? '' : 's'}`,
-            fmt(sideDuration({ tracks }))
-          ].filter(Boolean).join(' / ') || 'Select a disc from your Discogs collection.';
-
-          const cover = document.getElementById('albumCover');
-          cover.hidden = !album.image;
-          cover.src = album.image || '';
-
-          const tabs = document.getElementById('sideTabs');
-          tabs.innerHTML = '';
-          for (const key of keys) {
-            const button = document.createElement('button');
-            button.textContent = key;
-            button.className = selectedSide === key ? 'active' : 'secondary';
-            button.onclick = () => selectSide(key);
-            tabs.append(button);
-          }
-
-          const list = document.getElementById('sideTracks');
-          list.innerHTML = '';
-          if (!tracks.length) {
-            list.textContent = 'No tracks for this side.';
-            return;
-          }
-          tracks.forEach((track, index) => {
+        function renderEvents() {
+          const target = document.getElementById('events');
+          target.innerHTML = eventLog.length ? '' : '<div class="event"><span class="event-time mono">--</span><span class="event-type">idle</span><span class="event-msg">Waiting for sync events</span></div>';
+          for (const item of eventLog) {
             const row = document.createElement('div');
-            row.className = 'track-item';
-            const number = document.createElement('div');
-            number.className = 'track-index';
-            number.textContent = track.position || String(index + 1).padStart(2, '0');
-            const title = document.createElement('div');
-            title.className = 'track-title';
-            title.textContent = track.title;
-            const time = document.createElement('div');
-            time.className = 'track-time';
-            time.textContent = fmt(track.durationSeconds);
-            row.append(number, title, time);
-            list.append(row);
-          });
+            row.className = `event ${item.type}`;
+            row.innerHTML = `<span class="event-time mono">${item.at.toLocaleTimeString()}</span><span class="event-type">${item.type}</span><span class="event-msg">${item.event}</span>`;
+            target.append(row);
+          }
         }
-
-        async function selectSide(sideKey) {
-          selectedSide = sideKey;
-          renderLoadedAlbum();
-          await saveSelectedSide();
-        }
-
-        async function saveSelectedSide() {
-          const plan = sidePlanFromAlbum(activeAlbum, selectedSide);
-          document.getElementById('sideJson').value = JSON.stringify(plan, null, 2);
-          await saveSide();
-        }
-
+        function toggleDropdown(force) { document.getElementById('releaseDropdown').classList.toggle('open', force); }
+        document.addEventListener('click', (event) => { if (!event.target.closest('.release-wrap')) toggleDropdown(false); });
+        function openSettings() { document.getElementById('settingsBackdrop').classList.add('open'); }
+        function closeSettings(event) { if (!event || event.target.id === 'settingsBackdrop' || event.target.classList.contains('close')) document.getElementById('settingsBackdrop').classList.remove('open'); }
+        function connectSpotifyIfNeeded() { if (!lastStatus?.spotify?.authenticated) window.location.href = '/spotify/login'; }
         async function post(path) {
           const response = await fetch(path, { method: 'POST' });
-          if (!response.ok) {
-            const data = await response.json().catch(() => ({ error: 'Request failed.' }));
-            alert(data.error || 'Request failed.');
-          }
+          if (!response.ok) alert((await response.json().catch(() => ({ error: 'Request failed.' }))).error || 'Request failed.');
           await tick();
         }
-
         async function saveSyncSettings() {
           const value = (id) => Number(document.getElementById(id).value || 0);
-          const response = await fetch('/sync/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              spotifyOffsetSeconds: value('spotifyOffset'),
-              activityThreshold: value('activityThreshold'),
-              silenceThreshold: value('silenceThreshold'),
-              leadInSilenceSeconds: value('leadInSilenceSeconds'),
-              transitionSilenceSeconds: value('transitionSilenceSeconds'),
-              transitionWindowSeconds: value('transitionWindowSeconds')
-            })
-          });
-          if (!response.ok) {
-            const data = await response.json().catch(() => ({ error: 'Could not save settings.' }));
-            alert(data.error || 'Could not save settings.');
-          }
+          const response = await fetch('/sync/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spotifyOffsetSeconds: value('spotifyOffset'), activityThreshold: value('activityThreshold'), silenceThreshold: value('silenceThreshold'), leadInSilenceSeconds: value('leadInSilenceSeconds'), transitionSilenceSeconds: value('transitionSilenceSeconds'), transitionWindowSeconds: value('transitionWindowSeconds') }) });
+          if (!response.ok) alert((await response.json().catch(() => ({ error: 'Could not save settings.' }))).error || 'Could not save settings.');
           await tick();
         }
-
-        async function nudgeOffset(delta) {
-          const input = document.getElementById('spotifyOffset');
-          input.value = (Number(input.value || 0) + delta).toFixed(2);
+        async function resetSettings() {
+          const defaults = { spotifyOffset: 0, activityThreshold: 0.001, silenceThreshold: 0.00045, leadInSilenceSeconds: 0.45, transitionSilenceSeconds: 1.6, transitionWindowSeconds: 35 };
+          for (const [id, value] of Object.entries(defaults)) document.getElementById(id).value = value;
           await saveSyncSettings();
         }
-
-        function drawRmsGraph(rms, settings) {
-          rmsHistory.push(rms);
-          if (rmsHistory.length > 240) rmsHistory.shift();
-
-          const canvas = document.getElementById('rmsGraph');
-          const rect = canvas.getBoundingClientRect();
-          const scale = window.devicePixelRatio || 1;
-          const width = Math.max(1, Math.floor(rect.width * scale));
-          const height = Math.max(1, Math.floor(rect.height * scale));
-          if (canvas.width !== width || canvas.height !== height) {
-            canvas.width = width;
-            canvas.height = height;
+        function renderReleaseRows() {
+          const rows = document.getElementById('releaseRows');
+          rows.innerHTML = '';
+          for (const release of releases) {
+            const row = document.createElement('div');
+            row.className = `release-row ${Number(release.id) === Number(selectedReleaseId) ? 'selected' : ''}`;
+            row.onclick = () => loadDiscogsRelease(release.id);
+            row.innerHTML = `<div class="art-sm">${artHTML(release.thumb)}</div><div style="flex:1;min-width:0"><div class="row-title">${release.title}</div><div class="row-meta">${release.artists || ''} · ${release.year || ''}</div></div><div class="accent">${Number(release.id) === Number(selectedReleaseId) ? '●' : ''}</div>`;
+            rows.append(row);
           }
-
-          const ctx = canvas.getContext('2d');
-          ctx.clearRect(0, 0, width, height);
-          ctx.fillStyle = '#fff';
-          ctx.fillRect(0, 0, width, height);
-
-          const maxRms = Math.max(0.004, Number(settings.activityThreshold || 0.001) * 12, ...rmsHistory) * 1.15;
-          const yFor = (value) => height - Math.min(1, value / maxRms) * height;
-
-          const drawThreshold = (value, color) => {
-            const y = yFor(Number(value || 0));
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1 * scale;
-            ctx.setLineDash([4 * scale, 4 * scale]);
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(width, y);
-            ctx.stroke();
-            ctx.setLineDash([]);
-          };
-
-          drawThreshold(settings.silenceThreshold, '#c28f4a');
-          drawThreshold(settings.activityThreshold, '#2d6a5f');
-
-          ctx.strokeStyle = '#8d3f2f';
-          ctx.lineWidth = 2 * scale;
-          ctx.beginPath();
-          rmsHistory.forEach((value, index) => {
-            const x = rmsHistory.length <= 1 ? width : (index / (rmsHistory.length - 1)) * width;
-            const y = yFor(value);
-            if (index === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-          });
-          ctx.stroke();
+          document.getElementById('collectionCount').textContent = `${releases.length} releases`;
         }
-
-        async function saveSide() {
-          const body = document.getElementById('sideJson').value;
-          const response = await fetch('/side', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body
-          });
-          if (!response.ok) {
-            const data = await response.json().catch(() => ({ error: 'Could not save side.' }));
-            alert(data.error || 'Could not save side.');
-          }
-          await tick();
-        }
-
-        function loadTemplate() {
-          activeAlbum = template;
-          selectedSide = 'A';
-          renderLoadedAlbum();
-          document.getElementById('sideJson').value = JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide), null, 2);
-        }
-
-        async function loadDiscogsCollection() {
-          const select = document.getElementById('discogsSelect');
-          const hint = document.getElementById('discogsHint');
-          select.innerHTML = '';
-          hint.textContent = 'Loading Discogs collection...';
+        async function loadDiscogsCollection(event) {
+          if (event) event.stopPropagation();
           const response = await fetch('/discogs/collection');
           const data = await response.json();
-          if (!response.ok) {
-            hint.textContent = data.error || 'Could not load Discogs collection.';
-            return;
-          }
-          for (const release of data.releases || []) {
-            const option = document.createElement('option');
-            option.value = release.id;
-            option.textContent = [release.artists, release.title, release.year || ''].filter(Boolean).join(' - ');
-            option.dataset.image = release.thumb || '';
-            select.append(option);
-          }
-          hint.textContent = `${(data.releases || []).length} collection releases loaded.`;
+          if (!response.ok) { pushEvent(data.error || 'Could not load Discogs collection'); return; }
+          releases = data.releases || [];
+          renderReleaseRows();
         }
-
-        async function loadDiscogsRelease() {
-          const select = document.getElementById('discogsSelect');
-          const id = Number(select.value);
-          if (!id) return;
-          const hint = document.getElementById('discogsHint');
-          hint.textContent = 'Loading Discogs release...';
-          const response = await fetch('/discogs/load-release', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id })
-          });
+        async function loadDiscogsRelease(id) {
+          selectedReleaseId = Number(id);
+          toggleDropdown(false);
+          const response = await fetch('/discogs/load-release', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedReleaseId }) });
           const data = await response.json();
-          if (!response.ok) {
-            hint.textContent = data.error || 'Could not load Discogs release.';
-            return;
-          }
+          if (!response.ok) { pushEvent(data.error || 'Could not load Discogs release'); return; }
           activeAlbum = data.release;
           selectedSide = (activeAlbum.sideOrder || Object.keys(activeAlbum.sides || {}))[0] || 'A';
-          renderLoadedAlbum();
-          document.getElementById('sideJson').value = JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide), null, 2);
+          pushEvent(activeAlbum.spotifyMatch?.name ? `Spotify match: ${activeAlbum.spotifyMatch.name} (${activeAlbum.spotifyMatch.confidence}, ${activeAlbum.spotifyMatch.trackMatches}/${activeAlbum.spotifyMatch.discogsTrackCount} tracks)` : 'Loaded Discogs release without Spotify match');
+          renderReleaseRows();
+          renderDisc();
           await saveSelectedSide();
-          const match = activeAlbum.spotifyMatch;
-          hint.textContent = match && match.name
-            ? `Loaded Discogs release. Spotify match: ${match.artists ? match.artists + ' - ' : ''}${match.name} (${match.confidence || 'unknown'}, ${match.trackMatches || 0}/${match.discogsTrackCount || 0} tracks).`
-            : 'Loaded Discogs release. No Spotify match attached.';
+        }
+        async function saveSelectedSide() {
+          if (!activeAlbum) return;
+          const response = await fetch('/side', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sidePlanFromAlbum(activeAlbum, selectedSide)) });
+          if (!response.ok) alert((await response.json().catch(() => ({ error: 'Could not save side.' }))).error || 'Could not save side.');
           await tick();
         }
-
-        async function tick() {
-          const response = await fetch('/status');
-          const status = await response.json();
-          const side = status.side || { name: '--', tracks: [] };
-          document.getElementById('connected').textContent = status.audioConnected ? 'connected' : 'waiting';
-          document.getElementById('device').textContent = status.lastDeviceName;
-          document.getElementById('sampleRate').textContent = status.sampleRate || '--';
-          document.getElementById('frames').textContent = status.frameCount;
-          document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5);
-          document.getElementById('mode').textContent = status.mode;
-          document.getElementById('event').textContent = status.event;
-          document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no';
-          document.getElementById('silence').textContent = Number(status.silenceSeconds || 0).toFixed(1) + 's';
-          document.getElementById('sideElapsed').textContent = fmt(status.sideElapsedSeconds);
-          document.getElementById('needleDrop').textContent = status.needleDropAt || '--';
-          const settings = status.settings || {};
-          drawRmsGraph(Number(status.rms || 0), settings);
-          const offset = Number(settings.spotifyOffsetSeconds || 0);
-          document.getElementById('spotifyOffsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s`;
-          const offsetInput = document.getElementById('spotifyOffset');
-          if (document.activeElement !== offsetInput) {
-            offsetInput.value = offset.toFixed(2);
-          }
-          const syncInputDefaults = {
-            activityThreshold: 0.001,
-            silenceThreshold: 0.00045,
-            leadInSilenceSeconds: 0.45,
-            transitionSilenceSeconds: 1.6,
-            transitionWindowSeconds: 35
-          };
-          for (const [id, fallback] of Object.entries(syncInputDefaults)) {
-            const input = document.getElementById(id);
-            if (document.activeElement !== input) {
-              const value = Number(settings[id] ?? fallback);
-              input.value = id.includes('Threshold') ? value.toFixed(5) : value.toFixed(1);
-            }
-          }
-          document.getElementById('sideName').textContent = side.name || '--';
-          document.getElementById('track').textContent = `${Number(status.currentTrackIndex || 0) + 1}. ${status.currentTrackTitle}`;
-          document.getElementById('trackElapsed').textContent = fmt(status.currentTrackElapsedSeconds);
-          document.getElementById('trackRemaining').textContent = fmt(status.currentTrackRemainingSeconds);
-          document.getElementById('nextTrack').textContent = status.nextTrackTitle || '--';
-          document.getElementById('progress').style.width = Math.min(100, (status.sideElapsedSeconds / Math.max(1, sideDuration(side))) * 100) + '%';
-          const spotify = status.spotify || {};
-          document.getElementById('spotifyAuth').textContent = spotify.configured ? (spotify.authenticated ? 'connected' : 'not connected') : 'missing config';
-          document.getElementById('spotifyUser').textContent = spotify.user || '--';
-          const profile = document.getElementById('spotifyProfile');
-          profile.hidden = !spotify.authenticated;
-          document.getElementById('spotifyProfileName').textContent = spotify.user || '--';
-          const avatar = document.getElementById('spotifyAvatar');
-          avatar.hidden = !spotify.image;
-          avatar.src = spotify.image || '';
-          document.getElementById('spotifyTarget').textContent = spotify.targetDevice || '--';
-          document.getElementById('spotifyRedirect').textContent = spotify.redirectUri || '--';
-          document.getElementById('spotifyAction').textContent = spotify.lastAction || '--';
-          document.getElementById('spotifyError').textContent = spotify.error || '--';
-
-          const sideBox = document.getElementById('sideJson');
-          if (!sideBox.value && side.tracks && side.tracks.length) {
-            sideBox.value = JSON.stringify(side, null, 2);
-            activeAlbum = {
-              name: side.name || 'Loaded side',
-              artists: '',
-              image: '',
-              tracks: side.tracks || []
-            };
-            selectedSide = 'A';
-            renderLoadedAlbum();
-          }
+        function selectSide(side) { selectedSide = side; renderDisc(); saveSelectedSide(); }
+        function drawRmsGraph(rms, settings) {
+          rmsHistory.push(rms); if (rmsHistory.length > 240) rmsHistory.shift();
+          const canvas = document.getElementById('rmsGraph'); const rect = canvas.getBoundingClientRect(); const scale = window.devicePixelRatio || 1;
+          const width = Math.max(1, Math.floor(rect.width * scale)); const height = Math.max(1, Math.floor(rect.height * scale));
+          if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+          const styles = getComputedStyle(document.documentElement); const ctx = canvas.getContext('2d'); ctx.clearRect(0, 0, width, height);
+          const maxRms = Math.max(0.004, Number(settings.activityThreshold || 0.001) * 12, ...rmsHistory) * 1.15;
+          const yFor = (value) => height - Math.sqrt(Math.min(1, Math.max(0, value / maxRms))) * height;
+          const drawThreshold = (value) => { const y = yFor(Number(value || 0)); ctx.strokeStyle = styles.getPropertyValue('--hbd').trim(); ctx.lineWidth = scale; ctx.setLineDash([3 * scale, 4 * scale]); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); ctx.setLineDash([]); };
+          drawThreshold(settings.silenceThreshold); drawThreshold(settings.activityThreshold);
+          ctx.strokeStyle = styles.getPropertyValue('--acc').trim(); ctx.lineWidth = 1.4 * scale; ctx.beginPath();
+          rmsHistory.forEach((value, index) => { const x = rmsHistory.length <= 1 ? width : (index / (rmsHistory.length - 1)) * width; const y = yFor(value); if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }); ctx.stroke();
         }
-
-        loadTemplate();
-        renderLoadedAlbum();
-        loadDiscogsCollection();
-        tick();
-        setInterval(tick, 1000);
+        function renderDisc(status) {
+          const side = status?.side || (activeAlbum ? sidePlanFromAlbum(activeAlbum, selectedSide) : { name: 'No side', tracks: [] });
+          const tracks = activeAlbum ? selectedTracks() : (side.tracks || []);
+          const titleParts = String(activeAlbum?.name || side.name || 'No disc selected').split(' - Side ');
+          document.getElementById('discTitle').textContent = activeAlbum?.name || titleParts[0] || 'No disc selected';
+          document.getElementById('discMeta').textContent = activeAlbum ? `${activeAlbum.artists || ''} · Side ${selectedSide} · ${tracks.length} tracks · ${fmt(sideDuration({ tracks }))}` : `${tracks.length} tracks · ${fmt(sideDuration(side))}`;
+          document.getElementById('discArt').innerHTML = artHTML(activeAlbum?.image);
+          document.getElementById('chipArt').innerHTML = artHTML(activeAlbum?.image);
+          document.getElementById('chipTitle').textContent = activeAlbum?.name || 'Select disc';
+          document.getElementById('chipArtist').textContent = activeAlbum?.artists ? `— ${activeAlbum.artists}` : '';
+          document.getElementById('discCaption').textContent = activeAlbum?.spotifyMatch?.name ? `Spotify match: ${activeAlbum.spotifyMatch.artists ? activeAlbum.spotifyMatch.artists + ' - ' : ''}${activeAlbum.spotifyMatch.name} (${activeAlbum.spotifyMatch.confidence}, ${activeAlbum.spotifyMatch.trackMatches}/${activeAlbum.spotifyMatch.discogsTrackCount} tracks).` : 'Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.';
+          const pills = document.getElementById('sidePills'); pills.innerHTML = '';
+          for (const key of getSideKeys(activeAlbum || { tracks })) { const btn = document.createElement('button'); btn.className = `side-pill ${key === selectedSide ? 'active' : ''}`; btn.textContent = key; btn.onclick = () => selectSide(key); pills.append(btn); }
+          const list = document.getElementById('trackList'); list.innerHTML = '';
+          const activeIndex = Number(status?.currentTrackIndex || 0);
+          tracks.forEach((track, index) => { const row = document.createElement('div'); row.className = `track-row ${index === activeIndex ? 'active' : ''}`; row.innerHTML = `<div class="trk-num">${track.position || String(index + 1).padStart(2, '0')}</div><div class="trk-title">${track.title}</div><div class="trk-time">${fmt(track.durationSeconds)}</div>`; list.append(row); });
+        }
+        function applySettings(settings) {
+          const values = { spotifyOffset: settings.spotifyOffsetSeconds ?? 0, activityThreshold: settings.activityThreshold ?? 0.001, silenceThreshold: settings.silenceThreshold ?? 0.00045, leadInSilenceSeconds: settings.leadInSilenceSeconds ?? 0.45, transitionSilenceSeconds: settings.transitionSilenceSeconds ?? 1.6, transitionWindowSeconds: settings.transitionWindowSeconds ?? 35 };
+          for (const [id, value] of Object.entries(values)) { const input = document.getElementById(id); if (document.activeElement !== input) input.value = id.includes('Threshold') ? Number(value).toFixed(5) : Number(value).toFixed(2); }
+        }
+        async function tick() {
+          const response = await fetch('/status'); const status = await response.json(); lastStatus = status; const settings = status.settings || {}; const side = status.side || { name: '--', tracks: [] };
+          pushEvent(status.event); drawRmsGraph(Number(status.rms || 0), settings); applySettings(settings);
+          document.getElementById('streamBadge').className = `badge ${status.audioConnected ? '' : 'bad'}`; document.getElementById('streamBadge').innerHTML = `<span class="dot ${status.audioConnected ? '' : 'bad'}"></span>${status.audioConnected ? 'Connected' : 'Waiting'}`;
+          document.getElementById('deviceName').textContent = status.lastDeviceName || 'none'; document.getElementById('khz').textContent = status.sampleRate ? `${(Number(status.sampleRate) / 1000).toFixed(1)} kHz` : '-- kHz'; document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5); document.getElementById('framesLabel').textContent = `frames ${status.frameCount || 0}`; document.getElementById('silenceAxis').textContent = `silence threshold ${Number(settings.silenceThreshold || 0).toFixed(5)}`;
+          document.getElementById('modeBadge').textContent = status.mode || 'idle'; document.getElementById('sideElapsed').textContent = fmt(status.sideElapsedSeconds); document.getElementById('sideTotal').textContent = fmt(sideDuration(side)); document.getElementById('sideFill').style.width = `${Math.min(100, (Number(status.sideElapsedSeconds || 0) / Math.max(1, sideDuration(side))) * 100)}%`; document.getElementById('needleDrop').textContent = status.needleDropAt || '--'; document.getElementById('silence').textContent = `${Number(status.silenceSeconds || 0).toFixed(1)} s`; document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no'; document.getElementById('active').className = status.audioActive ? 'good' : '';
+          const currentTrack = (side.tracks || [])[status.currentTrackIndex || 0] || {}; document.getElementById('trackRef').textContent = `${currentTrack.position || '--'} · ${status.currentTrackTitle || '--'}`; document.getElementById('trackElapsed').textContent = fmt(status.currentTrackElapsedSeconds); document.getElementById('trackRemaining').textContent = fmt(status.currentTrackRemainingSeconds); const offset = Number(settings.spotifyOffsetSeconds || 0); document.getElementById('offsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)} s`; document.getElementById('nextTrack').textContent = status.nextTrackTitle || '--';
+          document.getElementById('nowTitle').textContent = status.currentTrackTitle || '--'; document.getElementById('nowSub').textContent = `${activeAlbum?.artists || ''} · ${currentTrack.position || ''}`; document.getElementById('nowElapsed').textContent = fmt(status.currentTrackElapsedSeconds); document.getElementById('nowDur').textContent = fmt(currentTrack.durationSeconds); document.getElementById('nowFill').style.width = `${Math.min(100, (Number(status.currentTrackElapsedSeconds || 0) / Math.max(1, Number(currentTrack.durationSeconds || 1))) * 100)}%`; document.getElementById('nowArt').innerHTML = artHTML(activeAlbum?.image);
+          const spotify = status.spotify || {}; document.getElementById('spotifyDot').className = `dot ${spotify.authenticated ? '' : 'bad'}`; document.getElementById('spotifyName').textContent = spotify.authenticated ? firstName(spotify.user) : 'Connect'; document.getElementById('spotifyChip').title = spotify.authenticated ? `Spotify connected as ${spotify.user} (${spotify.targetDevice || ''})` : 'Connect Spotify'; document.getElementById('spotifyAvatar').innerHTML = spotify.image ? `<img src="${spotify.image}" alt="">` : initials(spotify.user);
+          renderDisc(status);
+        }
+        initTheme(); renderEvents(); loadDiscogsCollection(); tick(); setInterval(tick, 1000);
       </script>
     </body>
   </html>
