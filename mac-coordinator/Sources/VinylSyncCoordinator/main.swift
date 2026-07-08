@@ -1675,10 +1675,10 @@ func pageHTML() -> String {
         .art-sm, .art-md, .art-xl { flex: none; border-radius: 4px; background: repeating-linear-gradient(45deg,var(--tk),var(--tk) 3px,var(--p2) 3px,var(--p2) 6px); object-fit: cover; display: grid; place-items: center; font: 500 7px 'IBM Plex Mono', monospace; color: var(--gy); overflow: hidden; }
         .art-sm { width: 28px; height: 28px; } .art-md { width: 40px; height: 40px; border-radius: 6px; } .art-xl { width: 100%; aspect-ratio: 1; border-radius: 8px; font-size: 10px; }
         .art-sm img, .art-md img, .art-xl img { width: 100%; height: 100%; object-fit: cover; display: block; }
-        .release-title { font-size: 13px; font-weight: 500; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .release-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .release-title span { color: var(--sub); font-weight: 400; }
         .caret { font-size: 9px; color: var(--sub); }
-        .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 300px; max-height: 520px; overflow-y: auto; overflow-x: hidden; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
+        .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 100%; max-width: 100%; max-height: 520px; overflow-y: auto; overflow-x: hidden; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
         .dropdown.open { display: block; }
         .disc-search { position: sticky; top: 0; z-index: 2; background: var(--card); padding: 4px 4px 8px; }
         .disc-search input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; outline: none; }
@@ -1748,7 +1748,7 @@ func pageHTML() -> String {
         .event-type { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--gy); text-transform: uppercase; }
         .event.spotify .event-type, .event.track .event-type { color: var(--gn); } .event.needle .event-type { color: var(--acc); } .event.settings .event-type { color: var(--pu); } .event.error .event-type { color: var(--rd); }
         .event-msg { font-size: 12.5px; }
-        .rail { position: fixed; top: 76px; bottom: 92px; overflow: auto; padding: 16px; z-index: 4; }
+        .rail { position: fixed; top: 76px; bottom: 92px; overflow-y: auto; overflow-x: hidden; padding: 16px; z-index: 4; }
         .left-rail { display: flex; flex-direction: column; gap: 12px; }
         .right-rail { display: flex; flex-direction: column; gap: 14px; }
         .left-rail { left: 24px; width: 300px; }
