@@ -766,6 +766,13 @@ final class StateStore {
     return copy
   }
 
+  func currentSettings() -> SyncSettings {
+    lock.lock()
+    let settings = snapshot.settings
+    lock.unlock()
+    return settings
+  }
+
   private func resetLocked(event: String) {
     snapshot.mode = "idle"
     snapshot.audioActive = false
@@ -954,6 +961,11 @@ final class CoordinatorServer {
     if request.method == "GET", request.path == "/status" {
       let snapshot = state.currentSnapshot()
       respondJSON(connection: connection, status: 200, body: statusPayload(snapshot))
+      return
+    }
+
+    if request.method == "GET", request.path == "/sync/settings" {
+      respondJSON(connection: connection, status: 200, body: settingsPayload(state.currentSettings()))
       return
     }
 
@@ -1266,18 +1278,21 @@ final class CoordinatorServer {
       "nextTrackTitle": snapshot.nextTrackTitle,
       "needleDropAt": snapshot.needleDropAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
       "event": snapshot.event,
-      "settings": [
-        "spotifyOffsetSeconds": snapshot.settings.spotifyOffsetSeconds,
-        "spotifyStartDelaySeconds": snapshot.settings.spotifyStartDelaySeconds,
-        "activityThreshold": snapshot.settings.activityThreshold,
-        "silenceThreshold": snapshot.settings.silenceThreshold,
-        "leadInSilenceSeconds": snapshot.settings.leadInSilenceSeconds,
-        "transitionSilenceSeconds": snapshot.settings.transitionSilenceSeconds,
-        "transitionWindowSeconds": snapshot.settings.transitionWindowSeconds,
-        "pendingTrackIndex": snapshot.pendingTrackIndex.map { $0 as Any } ?? NSNull()
-      ],
+      "pendingTrackIndex": snapshot.pendingTrackIndex.map { $0 as Any } ?? NSNull(),
       "spotify": spotifyPayload(),
       "discogs": discogsPayload()
+    ]
+  }
+
+  private func settingsPayload(_ settings: SyncSettings) -> [String: Any] {
+    [
+      "spotifyOffsetSeconds": settings.spotifyOffsetSeconds,
+      "spotifyStartDelaySeconds": settings.spotifyStartDelaySeconds,
+      "activityThreshold": settings.activityThreshold,
+      "silenceThreshold": settings.silenceThreshold,
+      "leadInSilenceSeconds": settings.leadInSilenceSeconds,
+      "transitionSilenceSeconds": settings.transitionSilenceSeconds,
+      "transitionWindowSeconds": settings.transitionWindowSeconds
     ]
   }
 
@@ -1843,6 +1858,7 @@ func pageHTML() -> String {
         let selectedReleaseId = null;
         let discSearchTerm = '';
         let lastStatus = null;
+        let syncSettings = { spotifyOffsetSeconds: 0, spotifyStartDelaySeconds: 0, activityThreshold: 0.001, silenceThreshold: 0.00045, leadInSilenceSeconds: 0.45, transitionSilenceSeconds: 1.6, transitionWindowSeconds: 35 };
         const rmsHistory = [];
         const eventLog = [];
         let lastEvent = '';
@@ -1858,7 +1874,7 @@ func pageHTML() -> String {
           const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
           document.documentElement.dataset.theme = next;
           localStorage.setItem('vinylsync-theme', next);
-          drawRmsGraph(Number(lastStatus?.rms || 0), lastStatus?.settings || {});
+          drawRmsGraph(Number(lastStatus?.rms || 0), syncSettings);
         }
         function fmt(seconds) {
           const value = Math.max(0, Number(seconds || 0));
@@ -1947,6 +1963,7 @@ func pageHTML() -> String {
           const value = (id) => Number(document.getElementById(id).value || 0);
           const response = await fetch('/sync/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spotifyOffsetSeconds: value('spotifyOffset'), spotifyStartDelaySeconds: value('spotifyStartDelay'), activityThreshold: value('activityThreshold'), silenceThreshold: value('silenceThreshold'), leadInSilenceSeconds: value('leadInSilenceSeconds'), transitionSilenceSeconds: value('transitionSilenceSeconds'), transitionWindowSeconds: value('transitionWindowSeconds') }) });
           if (!response.ok) alert((await response.json().catch(() => ({ error: 'Could not save settings.' }))).error || 'Could not save settings.');
+          await loadSyncSettings();
           await tick();
         }
         async function resetSettings() {
@@ -2037,11 +2054,18 @@ func pageHTML() -> String {
           const values = { spotifyOffset: settings.spotifyOffsetSeconds ?? 0, spotifyStartDelay: settings.spotifyStartDelaySeconds ?? 0, activityThreshold: settings.activityThreshold ?? 0.001, silenceThreshold: settings.silenceThreshold ?? 0.00045, leadInSilenceSeconds: settings.leadInSilenceSeconds ?? 0.45, transitionSilenceSeconds: settings.transitionSilenceSeconds ?? 1.6, transitionWindowSeconds: settings.transitionWindowSeconds ?? 35 };
           for (const [id, value] of Object.entries(values)) { const input = document.getElementById(id); if (document.activeElement !== input) input.value = id.includes('Threshold') ? Number(value).toFixed(5) : Number(value).toFixed(2); }
         }
+        async function loadSyncSettings() {
+          const response = await fetch('/sync/settings');
+          const settings = await response.json();
+          if (!response.ok) { pushEvent(settings.error || 'Could not load settings'); return; }
+          Object.assign(syncSettings, settings);
+          applySettings(syncSettings);
+        }
         async function tick() {
-          const response = await fetch('/status'); const status = await response.json(); lastStatus = status; const settings = status.settings || {}; const side = status.side || { name: '--', tracks: [] };
-          pushEvent(status.event); drawRmsGraph(Number(status.rms || 0), settings); applySettings(settings);
+          const response = await fetch('/status'); const status = await response.json(); lastStatus = status; const side = status.side || { name: '--', tracks: [] };
+          pushEvent(status.event); drawRmsGraph(Number(status.rms || 0), syncSettings);
           document.getElementById('streamBadge').className = `badge ${status.audioConnected ? '' : 'bad'}`; document.getElementById('streamBadge').innerHTML = `<span class="dot ${status.audioConnected ? '' : 'bad'}"></span>${status.audioConnected ? 'Connected' : 'Waiting'}`;
-          document.getElementById('deviceName').textContent = status.lastDeviceName || 'none'; document.getElementById('khz').textContent = status.sampleRate ? `${(Number(status.sampleRate) / 1000).toFixed(1)} kHz` : '-- kHz'; document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5); document.getElementById('framesLabel').textContent = `frames ${status.frameCount || 0}`; document.getElementById('silenceAxis').textContent = `silence threshold ${Number(settings.silenceThreshold || 0).toFixed(5)}`;
+          document.getElementById('deviceName').textContent = status.lastDeviceName || 'none'; document.getElementById('khz').textContent = status.sampleRate ? `${(Number(status.sampleRate) / 1000).toFixed(1)} kHz` : '-- kHz'; document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5); document.getElementById('framesLabel').textContent = `frames ${status.frameCount || 0}`; document.getElementById('silenceAxis').textContent = `silence threshold ${Number(syncSettings.silenceThreshold || 0).toFixed(5)}`;
           document.getElementById('modeBadge').textContent = status.mode || 'idle'; document.getElementById('silence').textContent = `${Number(status.silenceSeconds || 0).toFixed(1)} s`; document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no'; document.getElementById('active').className = status.audioActive ? 'good' : '';
           const showSelectedDisc = Boolean(activeAlbum);
           const currentTrack = showSelectedDisc ? (selectedTracks()[status.currentTrackIndex || 0] || {}) : {};
@@ -2064,11 +2088,11 @@ func pageHTML() -> String {
           } else {
             clearTrackDisplay();
           }
-          const offset = Number(settings.spotifyOffsetSeconds || 0); document.getElementById('offsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)} s`;
+          const offset = Number(syncSettings.spotifyOffsetSeconds || 0); document.getElementById('offsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)} s`;
           const spotify = status.spotify || {}; document.getElementById('spotifyDot').className = `dot ${spotify.authenticated ? '' : 'bad'}`; document.getElementById('spotifyName').textContent = spotify.authenticated ? firstName(spotify.user) : 'Connect'; document.getElementById('spotifyChip').title = spotify.authenticated ? `Spotify connected as ${spotify.user} (${spotify.targetDevice || ''})` : 'Connect Spotify'; document.getElementById('spotifyAvatar').innerHTML = spotify.image ? `<img src="${spotify.image}" alt="">` : initials(spotify.user);
           renderDisc(status);
         }
-        initTheme(); renderEvents(); loadDiscogsCollection(); tick(); setInterval(tick, 1000);
+        initTheme(); renderEvents(); loadDiscogsCollection(); loadSyncSettings(); tick(); setInterval(tick, 1000);
       </script>
     </body>
   </html>
