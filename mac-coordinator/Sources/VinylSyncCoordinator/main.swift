@@ -37,6 +37,7 @@ struct SyncSettings: Codable {
   var spotifyOffsetSeconds: Double
   var activityThreshold: Double
   var silenceThreshold: Double
+  var leadInSilenceSeconds: Double
   var transitionSilenceSeconds: Double
   var transitionWindowSeconds: Double
 
@@ -44,6 +45,7 @@ struct SyncSettings: Codable {
     spotifyOffsetSeconds: 0,
     activityThreshold: 0.0010,
     silenceThreshold: 0.00045,
+    leadInSilenceSeconds: 0.45,
     transitionSilenceSeconds: 1.6,
     transitionWindowSeconds: 35
   )
@@ -52,12 +54,14 @@ struct SyncSettings: Codable {
     spotifyOffsetSeconds: Double = 0,
     activityThreshold: Double = 0.0010,
     silenceThreshold: Double = 0.00045,
+    leadInSilenceSeconds: Double = 0.45,
     transitionSilenceSeconds: Double = 1.6,
     transitionWindowSeconds: Double = 35
   ) {
     self.spotifyOffsetSeconds = spotifyOffsetSeconds
     self.activityThreshold = activityThreshold
     self.silenceThreshold = silenceThreshold
+    self.leadInSilenceSeconds = leadInSilenceSeconds
     self.transitionSilenceSeconds = transitionSilenceSeconds
     self.transitionWindowSeconds = transitionWindowSeconds
   }
@@ -67,6 +71,7 @@ struct SyncSettings: Codable {
     spotifyOffsetSeconds = try container.decodeIfPresent(Double.self, forKey: .spotifyOffsetSeconds) ?? Self.default.spotifyOffsetSeconds
     activityThreshold = try container.decodeIfPresent(Double.self, forKey: .activityThreshold) ?? Self.default.activityThreshold
     silenceThreshold = try container.decodeIfPresent(Double.self, forKey: .silenceThreshold) ?? Self.default.silenceThreshold
+    leadInSilenceSeconds = try container.decodeIfPresent(Double.self, forKey: .leadInSilenceSeconds) ?? Self.default.leadInSilenceSeconds
     transitionSilenceSeconds = try container.decodeIfPresent(Double.self, forKey: .transitionSilenceSeconds) ?? Self.default.transitionSilenceSeconds
     transitionWindowSeconds = try container.decodeIfPresent(Double.self, forKey: .transitionWindowSeconds) ?? Self.default.transitionWindowSeconds
   }
@@ -688,11 +693,31 @@ final class StateStore {
     switch snapshot.mode {
     case "armed":
       if activeNow {
-        snapshot.mode = "running"
+        snapshot.mode = "lead-in"
         snapshot.audioActive = true
         snapshot.needleDropAt = Date()
-        snapshot.event = "needle drop"
-        request = playbackRequestLocked(reason: "needle drop")
+        snapshot.event = "needle drop ignored"
+      }
+    case "lead-in":
+      snapshot.audioActive = activeNow
+      if !activeNow, snapshot.silenceSeconds >= settings.leadInSilenceSeconds {
+        snapshot.mode = "waiting-start"
+        snapshot.audioActive = false
+        snapshot.event = "waiting for first track start"
+      }
+    case "waiting-start":
+      snapshot.audioActive = activeNow
+      if activeNow {
+        snapshot.mode = "running"
+        snapshot.sideElapsedSeconds = 0
+        snapshot.currentTrackIndex = 0
+        snapshot.currentTrackElapsedSeconds = 0
+        snapshot.currentTrackRemainingSeconds = firstTrackDurationLocked()
+        snapshot.currentTrackTitle = firstTrackTitleLocked()
+        snapshot.nextTrackTitle = nextTrackTitleLocked(after: 0)
+        snapshot.silenceSeconds = 0
+        snapshot.event = "first track start"
+        request = playbackRequestLocked(reason: "first track start")
       }
     case "running":
       snapshot.sideElapsedSeconds += delta
@@ -1021,6 +1046,9 @@ final class CoordinatorServer {
         let silenceThreshold = json["silenceThreshold"] as? Double
           ?? (json["silenceThreshold"] as? Int).map(Double.init)
           ?? SyncSettings.default.silenceThreshold
+        let leadInSilenceSeconds = json["leadInSilenceSeconds"] as? Double
+          ?? (json["leadInSilenceSeconds"] as? Int).map(Double.init)
+          ?? SyncSettings.default.leadInSilenceSeconds
         let transitionSilenceSeconds = json["transitionSilenceSeconds"] as? Double
           ?? (json["transitionSilenceSeconds"] as? Int).map(Double.init)
           ?? SyncSettings.default.transitionSilenceSeconds
@@ -1031,6 +1059,7 @@ final class CoordinatorServer {
           spotifyOffsetSeconds: max(-30, min(30, offset)),
           activityThreshold: max(0.00001, min(0.1, activityThreshold)),
           silenceThreshold: max(0.00001, min(0.1, silenceThreshold)),
+          leadInSilenceSeconds: max(0.05, min(5, leadInSilenceSeconds)),
           transitionSilenceSeconds: max(0.2, min(10, transitionSilenceSeconds)),
           transitionWindowSeconds: max(1, min(120, transitionWindowSeconds))
         ))
@@ -1197,6 +1226,7 @@ final class CoordinatorServer {
         "spotifyOffsetSeconds": snapshot.settings.spotifyOffsetSeconds,
         "activityThreshold": snapshot.settings.activityThreshold,
         "silenceThreshold": snapshot.settings.silenceThreshold,
+        "leadInSilenceSeconds": snapshot.settings.leadInSilenceSeconds,
         "transitionSilenceSeconds": snapshot.settings.transitionSilenceSeconds,
         "transitionWindowSeconds": snapshot.settings.transitionWindowSeconds,
         "pendingTrackIndex": snapshot.pendingTrackIndex.map { $0 as Any } ?? NSNull()
@@ -1613,6 +1643,7 @@ func pageHTML() -> String {
               <label class="field-label">Spotify offset <input id="spotifyOffset" type="number" min="-30" max="30" step="0.25" value="0"></label>
               <label class="field-label">Active RMS <input id="activityThreshold" type="number" min="0.00001" max="0.1" step="0.0001" value="0.001"></label>
               <label class="field-label">Silence RMS <input id="silenceThreshold" type="number" min="0.00001" max="0.1" step="0.0001" value="0.00045"></label>
+              <label class="field-label">Lead-in silence <input id="leadInSilenceSeconds" type="number" min="0.05" max="5" step="0.05" value="0.45"></label>
               <label class="field-label">Gap seconds <input id="transitionSilenceSeconds" type="number" min="0.2" max="10" step="0.1" value="1.6"></label>
               <label class="field-label">Boundary window <input id="transitionWindowSeconds" type="number" min="1" max="120" step="1" value="35"></label>
             </div>
@@ -1625,7 +1656,7 @@ func pageHTML() -> String {
               <button class="secondary" onclick="saveSyncSettings()">Save settings</button>
               <button class="secondary" onclick="post('/sync/reset')">Reset</button>
             </div>
-            <div class="hint">Silence near a boundary now waits for vinyl audio to return before starting the next Spotify track.</div>
+            <div class="hint">Needle drop is ignored until lead-in silence is seen; later gaps wait for vinyl audio to return before starting Spotify.</div>
           </div>
 
           <div class="panel">
@@ -1854,6 +1885,7 @@ func pageHTML() -> String {
               spotifyOffsetSeconds: value('spotifyOffset'),
               activityThreshold: value('activityThreshold'),
               silenceThreshold: value('silenceThreshold'),
+              leadInSilenceSeconds: value('leadInSilenceSeconds'),
               transitionSilenceSeconds: value('transitionSilenceSeconds'),
               transitionWindowSeconds: value('transitionWindowSeconds')
             })
@@ -1967,6 +1999,7 @@ func pageHTML() -> String {
           const syncInputDefaults = {
             activityThreshold: 0.001,
             silenceThreshold: 0.00045,
+            leadInSilenceSeconds: 0.45,
             transitionSilenceSeconds: 1.6,
             transitionWindowSeconds: 35
           };
