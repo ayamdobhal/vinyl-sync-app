@@ -1665,7 +1665,7 @@ func pageHTML() -> String {
         .chart-label { font: 600 10px 'IBM Plex Mono', monospace; letter-spacing: 0.08em; color: var(--sub); }
         .chart-value { font: 500 12px 'IBM Plex Mono', monospace; color: var(--acc); }
         .chart-frames { margin-left: auto; font: 500 10px 'IBM Plex Mono', monospace; color: var(--sub); }
-        .rms-canvas { width: 100%; height: 96px; display: block; }
+        .rms-canvas { width: 100%; height: 180px; display: block; }
         .axis { display: flex; justify-content: space-between; font: 400 9px 'IBM Plex Mono', monospace; color: var(--ft); margin-top: 2px; }
         .stat-list { display: flex; flex-direction: column; gap: 10px; }
         .stat { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
@@ -1677,7 +1677,7 @@ func pageHTML() -> String {
         .primary { border: 0; border-radius: 8px; padding: 7px 14px; background: var(--acc); color: #fff; font-size: 12.5px; font-weight: 600; }
         .secondary { border: 1px solid var(--bd); border-radius: 8px; padding: 7px 14px; background: var(--card); font-size: 12.5px; font-weight: 500; }
         .secondary:hover { border-color: var(--hbd); }
-        .events { border-left: 2px solid var(--tk); margin-left: 5px; }
+        .events { border-left: 2px solid var(--tk); margin-left: 5px; min-height: 260px; }
         .event { position: relative; padding: 0 0 14px 18px; display: flex; align-items: baseline; gap: 10px; }
         .event:before { content: ''; position: absolute; left: -5px; top: 3px; width: 8px; height: 8px; border-radius: 50%; background: var(--gy); box-shadow: 0 0 0 3px var(--card); }
         .event.spotify:before, .event.track:before { background: var(--gn); } .event.needle:before { background: var(--acc); } .event.settings:before { background: var(--pu); } .event.error:before { background: var(--rd); }
@@ -1853,7 +1853,7 @@ func pageHTML() -> String {
           if (!event || event === lastEvent) return;
           lastEvent = event;
           eventLog.unshift({ event, type: classifyEvent(event), at: new Date() });
-          eventLog.splice(8);
+          eventLog.splice(14);
           renderEvents();
         }
         function renderEvents() {
