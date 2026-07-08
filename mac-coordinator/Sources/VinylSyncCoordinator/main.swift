@@ -1613,7 +1613,8 @@ func pageHTML() -> String {
         .logo { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
         .logo span, .accent { color: var(--acc); }
         .release-wrap { position: relative; }
-        .chip { display: flex; align-items: center; gap: 9px; padding: 5px 12px 5px 6px; background: var(--bg); border: 1px solid var(--bd); border-radius: 8px; cursor: pointer; min-height: 40px; }
+        .release-wrap.rail-picker { margin-bottom: 14px; }
+        .chip { display: flex; align-items: center; gap: 9px; padding: 5px 12px 5px 6px; background: var(--bg); border: 1px solid var(--bd); border-radius: 8px; cursor: pointer; min-height: 40px; width: 100%; }
         .chip:hover, .outline:hover { border-color: var(--hbd); }
         .art-sm, .art-md, .art-xl { flex: none; border-radius: 4px; background: repeating-linear-gradient(45deg,var(--tk),var(--tk) 3px,var(--p2) 3px,var(--p2) 6px); object-fit: cover; display: grid; place-items: center; font: 500 7px 'IBM Plex Mono', monospace; color: var(--gy); overflow: hidden; }
         .art-sm { width: 28px; height: 28px; } .art-md { width: 40px; height: 40px; border-radius: 6px; } .art-xl { width: 100%; aspect-ratio: 1; border-radius: 8px; font-size: 10px; }
@@ -1621,7 +1622,7 @@ func pageHTML() -> String {
         .release-title { font-size: 13px; font-weight: 500; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .release-title span { color: var(--sub); font-weight: 400; }
         .caret { font-size: 9px; color: var(--sub); }
-        .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 300px; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
+        .dropdown { position: absolute; top: calc(100% + 6px); left: 0; width: 300px; max-height: 520px; overflow: auto; background: var(--card); border: 1px solid var(--bd); border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.14); padding: 6px; z-index: 20; display: none; }
         .dropdown.open { display: block; }
         .release-row { display: flex; align-items: center; gap: 10px; padding: 7px; border-radius: 7px; cursor: pointer; }
         .release-row:hover { background: var(--p2); }
@@ -1649,7 +1650,7 @@ func pageHTML() -> String {
         .spotify-name { font-size: 12px; font-weight: 500; }
         .theme-toggle { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 1.5px solid var(--tx); background: linear-gradient(90deg,var(--tx) 50%,transparent 50%); cursor: pointer; }
         .outline { padding: 6px 13px; border: 1px solid var(--bd); border-radius: 8px; background: var(--card); font-size: 12.5px; font-weight: 500; }
-        .layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 18px 24px 28px; max-width: 1400px; margin: 0 auto; }
+        .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; gap: 16px; padding: 18px 24px 28px; max-width: 1680px; margin: 0 auto; align-items: start; }
         .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
         .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .card { background: var(--card); border: 1px solid var(--bd); border-radius: 12px; padding: 16px 18px; }
@@ -1685,7 +1686,11 @@ func pageHTML() -> String {
         .event-type { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--gy); text-transform: uppercase; }
         .event.spotify .event-type, .event.track .event-type { color: var(--gn); } .event.needle .event-type { color: var(--acc); } .event.settings .event-type { color: var(--pu); } .event.error .event-type { color: var(--rd); }
         .event-msg { font-size: 12.5px; }
-        .sidebar { position: sticky; top: 76px; align-self: start; padding: 16px; }
+        .rail { position: sticky; top: 76px; align-self: start; max-height: calc(100vh - 94px); overflow: auto; padding: 16px; }
+        .left-rail { display: flex; flex-direction: column; gap: 12px; }
+        .right-rail { display: flex; flex-direction: column; gap: 14px; }
+        .rail-title { font-size: 15px; font-weight: 600; margin-bottom: 10px; }
+        .sidebar { padding: 16px; }
         .disc-title { margin-top: 12px; font-size: 17px; font-weight: 600; }
         .disc-meta { margin-top: 4px; font-size: 12px; color: var(--sub); }
         .side-pills { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
@@ -1699,34 +1704,17 @@ func pageHTML() -> String {
         .trk-time { font: 500 11px 'IBM Plex Mono', monospace; color: var(--sub); } .track-row.active .trk-time { color: var(--acc); }
         .use-side { width: 100%; border: 0; border-radius: 8px; padding: 9px 0; background: var(--btn); color: var(--btnTx); font-size: 13px; font-weight: 600; }
         .caption { margin-top: 10px; font-size: 10.5px; color: var(--ft); line-height: 1.4; }
-        .modal-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(10,12,16,0.45); display: none; align-items: center; justify-content: center; padding: 24px; }
-        .modal-backdrop.open { display: flex; }
-        .modal { width: min(480px, 100%); background: var(--card); border: 1px solid var(--bd); border-radius: 14px; padding: 20px 22px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); }
-        .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-        .modal-title { font-size: 16px; font-weight: 600; }
-        .close { border: 0; background: transparent; color: var(--sub); font-size: 18px; padding: 0; }
-        .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+        .settings-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
         .field { display: grid; gap: 6px; }
         .field label { font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
         .field input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px; font: 500 12.5px 'IBM Plex Mono', monospace; }
-        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-        @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } .sidebar { position: static; } .now-header { display: none; } }
+        .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+        @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } .rail { position: static; max-height: none; } .now-header { display: none; } }
       </style>
     </head>
     <body>
       <header class="header">
         <div class="logo">Vinyl Sync<span>.</span></div>
-        <div class="release-wrap">
-          <div class="chip" id="releaseChip" onclick="toggleDropdown()">
-            <div class="art-sm" id="chipArt">art</div>
-            <div class="release-title"><span id="chipTitle">Loading collection</span> <span id="chipArtist"></span></div>
-            <div class="caret">▾</div>
-          </div>
-          <div class="dropdown" id="releaseDropdown">
-            <div id="releaseRows"></div>
-            <div class="drop-footer"><button class="linkish" onclick="loadDiscogsCollection(event)">Refresh collection</button><div class="mono" id="collectionCount">0 releases</div></div>
-          </div>
-        </div>
         <div class="now-header">
           <div class="art-md" id="nowArt">art</div>
           <div class="now-copy">
@@ -1738,9 +1726,31 @@ func pageHTML() -> String {
           <div class="avatar" id="spotifyAvatar">--</div><div class="dot" id="spotifyDot"></div><div class="spotify-name" id="spotifyName">Spotify</div>
         </div>
         <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme"></button>
-        <button class="outline" onclick="openSettings()">Settings</button>
       </header>
       <main class="layout">
+        <aside class="card rail left-rail">
+          <div>
+            <div class="rail-title">Disc selection</div>
+            <div class="release-wrap rail-picker">
+              <div class="chip" id="releaseChip" onclick="toggleDropdown()">
+                <div class="art-sm" id="chipArt">art</div>
+                <div class="release-title"><span id="chipTitle">Loading collection</span> <span id="chipArtist"></span></div>
+                <div class="caret">▾</div>
+              </div>
+              <div class="dropdown" id="releaseDropdown">
+                <div id="releaseRows"></div>
+                <div class="drop-footer"><button class="linkish" onclick="loadDiscogsCollection(event)">Refresh collection</button><div class="mono" id="collectionCount">0 releases</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="art-xl" id="discArt">art</div>
+          <div class="disc-title" id="discTitle">No disc selected</div>
+          <div class="disc-meta" id="discMeta">Select a release from Discogs</div>
+          <div class="side-pills" id="sidePills"></div>
+          <div class="track-list" id="trackList"></div>
+          <button class="use-side" onclick="saveSelectedSide()">Use this side</button>
+          <div class="caption" id="discCaption">Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.</div>
+        </aside>
         <section class="stack">
           <div class="card">
             <div class="card-title"><span>Audio stream</span><span class="badge" id="streamBadge"><span class="dot"></span>Waiting</span><div class="device"><div class="device-name" id="deviceName">none</div><div class="khz" id="khz">-- kHz</div></div></div>
@@ -1777,19 +1787,8 @@ func pageHTML() -> String {
             <div class="events" id="events"></div>
           </div>
         </section>
-        <aside class="card sidebar">
-          <div class="art-xl" id="discArt">art</div>
-          <div class="disc-title" id="discTitle">No disc selected</div>
-          <div class="disc-meta" id="discMeta">Select a release from Discogs</div>
-          <div class="side-pills" id="sidePills"></div>
-          <div class="track-list" id="trackList"></div>
-          <button class="use-side" onclick="saveSelectedSide()">Use this side</button>
-          <div class="caption" id="discCaption">Sides come from Discogs positions. Spotify matching runs behind the scenes for playback URIs.</div>
-        </aside>
-      </main>
-      <div class="modal-backdrop" id="settingsBackdrop" onclick="closeSettings(event)">
-        <div class="modal" onclick="event.stopPropagation()">
-          <div class="modal-head"><div class="modal-title">Sync settings</div><button class="close" onclick="closeSettings()">✕</button></div>
+        <aside class="card rail right-rail">
+          <div class="rail-title">Sync settings</div>
           <div class="settings-grid">
             <div class="field"><label>Spotify offset (s)</label><input id="spotifyOffset" type="number" min="-30" max="30" step="0.25"></div>
             <div class="field"><label>Active RMS</label><input id="activityThreshold" type="number" min="0.00001" max="0.1" step="0.0001"></div>
@@ -1799,9 +1798,9 @@ func pageHTML() -> String {
             <div class="field"><label>Boundary window (s)</label><input id="transitionWindowSeconds" type="number" min="1" max="120" step="1"></div>
           </div>
           <div class="caption">Needle drop is ignored until lead-in silence is seen; later gaps wait for vinyl audio to return before starting Spotify.</div>
-          <div class="modal-actions"><button class="secondary" onclick="resetSettings()">Reset</button><button class="primary" onclick="saveSyncSettings(); closeSettings()">Save settings</button></div>
-        </div>
-      </div>
+          <div class="settings-actions"><button class="secondary" onclick="resetSettings()">Reset</button><button class="primary" onclick="saveSyncSettings()">Save settings</button></div>
+        </aside>
+      </main>
       <script>
         let releases = [];
         let activeAlbum = null;
@@ -1868,8 +1867,6 @@ func pageHTML() -> String {
         }
         function toggleDropdown(force) { document.getElementById('releaseDropdown').classList.toggle('open', force); }
         document.addEventListener('click', (event) => { if (!event.target.closest('.release-wrap')) toggleDropdown(false); });
-        function openSettings() { document.getElementById('settingsBackdrop').classList.add('open'); }
-        function closeSettings(event) { if (!event || event.target.id === 'settingsBackdrop' || event.target.classList.contains('close')) document.getElementById('settingsBackdrop').classList.remove('open'); }
         function connectSpotifyIfNeeded() { if (!lastStatus?.spotify?.authenticated) window.location.href = '/spotify/login'; }
         async function post(path) {
           const response = await fetch(path, { method: 'POST' });
