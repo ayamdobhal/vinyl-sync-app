@@ -584,9 +584,11 @@ final class StateStore {
   private let lock = NSLock()
   private var snapshot = SyncSnapshot()
   private let settingsURL = URL(fileURLWithPath: ".state/sync-settings.json")
+  private let sideURL = URL(fileURLWithPath: ".state/side-plan.json")
 
   init() {
     snapshot.settings = Self.loadSettings(from: settingsURL)
+    snapshot.sidePlan = Self.loadSidePlan(from: sideURL)
     resetLocked(event: "ready")
   }
 
@@ -595,6 +597,7 @@ final class StateStore {
     snapshot.sidePlan = plan
     resetLocked(event: "side loaded")
     lock.unlock()
+    saveSidePlan(plan)
   }
 
   func arm() {
@@ -837,9 +840,12 @@ final class StateStore {
 
   private func playbackRequestLocked(reason: String) -> PlaybackRequest? {
     guard snapshot.sidePlan.tracks.indices.contains(snapshot.currentTrackIndex),
-          snapshot.playedTrackIndex != snapshot.currentTrackIndex,
-          let uri = snapshot.sidePlan.tracks[snapshot.currentTrackIndex].uri,
+          snapshot.playedTrackIndex != snapshot.currentTrackIndex else {
+      return nil
+    }
+    guard let uri = snapshot.sidePlan.tracks[snapshot.currentTrackIndex].uri,
           !uri.isEmpty else {
+      snapshot.event = "current track has no Spotify URI"
       return nil
     }
     snapshot.playedTrackIndex = snapshot.currentTrackIndex
@@ -860,6 +866,22 @@ final class StateStore {
       return .default
     }
     return settings
+  }
+
+  private func saveSidePlan(_ plan: SidePlan) {
+    try? FileManager.default.createDirectory(at: sideURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    if let data = try? JSONEncoder().encode(plan) {
+      try? data.write(to: sideURL)
+    }
+  }
+
+  private static func loadSidePlan(from url: URL) -> SidePlan {
+    guard let data = try? Data(contentsOf: url),
+          let plan = try? JSONDecoder().decode(SidePlan.self, from: data),
+          !plan.tracks.isEmpty else {
+      return .aThousandSunsSideA
+    }
+    return plan
   }
 }
 
@@ -1577,8 +1599,7 @@ func pageHTML() -> String {
         .row:last-child { border-bottom: 0; }
         .label { color: #6b6258; }
         .value { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
-        .meter { height: 12px; border-radius: 999px; background: #e3d7ca; overflow: hidden; margin-top: 10px; }
-        .bar { height: 100%; width: 0%; background: #2d6a5f; transition: width 120ms linear; }
+        .rms-graph { width: 100%; height: 92px; display: block; border: 1px solid #d8cdc0; border-radius: 6px; background: #fff; margin-top: 10px; }
         .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
         button { border: 1px solid #1f2328; background: #1f2328; color: white; border-radius: 6px; padding: 9px 12px; font: inherit; cursor: pointer; }
         button.secondary { background: transparent; color: #1f2328; }
@@ -1627,7 +1648,7 @@ func pageHTML() -> String {
             <div class="row"><span class="label">Sample rate</span><span class="value" id="sampleRate">--</span></div>
             <div class="row"><span class="label">Frames</span><span class="value" id="frames">--</span></div>
             <div class="row"><span class="label">RMS</span><span class="value" id="rmsValue">--</span></div>
-            <div class="meter"><div class="bar" id="rms"></div></div>
+            <canvas class="rms-graph" id="rmsGraph"></canvas>
           </div>
 
           <div class="panel">
@@ -1753,6 +1774,7 @@ func pageHTML() -> String {
         };
         let activeAlbum = template;
         let selectedSide = 'A';
+        const rmsHistory = [];
 
         function fmt(seconds) {
           const value = Math.max(0, Number(seconds || 0));
@@ -1903,6 +1925,55 @@ func pageHTML() -> String {
           await saveSyncSettings();
         }
 
+        function drawRmsGraph(rms, settings) {
+          rmsHistory.push(rms);
+          if (rmsHistory.length > 240) rmsHistory.shift();
+
+          const canvas = document.getElementById('rmsGraph');
+          const rect = canvas.getBoundingClientRect();
+          const scale = window.devicePixelRatio || 1;
+          const width = Math.max(1, Math.floor(rect.width * scale));
+          const height = Math.max(1, Math.floor(rect.height * scale));
+          if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+          }
+
+          const ctx = canvas.getContext('2d');
+          ctx.clearRect(0, 0, width, height);
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, width, height);
+
+          const maxRms = Math.max(0.004, Number(settings.activityThreshold || 0.001) * 12, ...rmsHistory) * 1.15;
+          const yFor = (value) => height - Math.min(1, value / maxRms) * height;
+
+          const drawThreshold = (value, color) => {
+            const y = yFor(Number(value || 0));
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1 * scale;
+            ctx.setLineDash([4 * scale, 4 * scale]);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          };
+
+          drawThreshold(settings.silenceThreshold, '#c28f4a');
+          drawThreshold(settings.activityThreshold, '#2d6a5f');
+
+          ctx.strokeStyle = '#8d3f2f';
+          ctx.lineWidth = 2 * scale;
+          ctx.beginPath();
+          rmsHistory.forEach((value, index) => {
+            const x = rmsHistory.length <= 1 ? width : (index / (rmsHistory.length - 1)) * width;
+            const y = yFor(value);
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+        }
+
         async function saveSide() {
           const body = document.getElementById('sideJson').value;
           const response = await fetch('/side', {
@@ -1982,7 +2053,6 @@ func pageHTML() -> String {
           document.getElementById('sampleRate').textContent = status.sampleRate || '--';
           document.getElementById('frames').textContent = status.frameCount;
           document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5);
-          document.getElementById('rms').style.width = Math.min(100, status.rms * 4500) + '%';
           document.getElementById('mode').textContent = status.mode;
           document.getElementById('event').textContent = status.event;
           document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no';
@@ -1990,6 +2060,7 @@ func pageHTML() -> String {
           document.getElementById('sideElapsed').textContent = fmt(status.sideElapsedSeconds);
           document.getElementById('needleDrop').textContent = status.needleDropAt || '--';
           const settings = status.settings || {};
+          drawRmsGraph(Number(status.rms || 0), settings);
           const offset = Number(settings.spotifyOffsetSeconds || 0);
           document.getElementById('spotifyOffsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)}s`;
           const offsetInput = document.getElementById('spotifyOffset');
