@@ -1632,17 +1632,18 @@ func pageHTML() -> String {
         .drop-footer { padding: 8px 10px 6px; border-top: 1px solid var(--bd); margin-top: 4px; display: flex; justify-content: space-between; align-items: center; }
         .linkish { border: 0; background: transparent; color: var(--sub); padding: 0; font-size: 11.5px; }
         .linkish:hover { color: var(--acc); }
-        .now-header { display: flex; align-items: center; gap: 12px; margin: 0 auto; }
-        .now-copy { display: flex; flex-direction: column; gap: 5px; width: 300px; min-width: 0; }
+        .bottom-player { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: grid; grid-template-columns: 320px minmax(0, 1fr) 320px; gap: 24px; align-items: center; padding: 12px 24px; background: color-mix(in srgb, var(--card) 94%, transparent); border-top: 1px solid var(--bd); backdrop-filter: blur(18px); }
+        .now-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .now-copy { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
         .now-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-        .now-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .now-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .now-sub { font-size: 11.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .progress-row { display: flex; align-items: center; gap: 8px; }
         .time { font: 500 10px 'IBM Plex Mono', monospace; color: var(--sub); }
         .mini-progress, .progress { position: relative; overflow: hidden; background: var(--tk); border-radius: 3px; }
         .mini-progress { flex: 1; height: 3px; } .progress { height: 5px; }
         .fill { height: 100%; width: 0%; background: var(--acc); border-radius: inherit; }
-        .spotify-chip { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 6px; background: var(--bg); border: 1px solid var(--bd); border-radius: 99px; cursor: pointer; }
+        .spotify-chip { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 6px; background: var(--bg); border: 1px solid var(--bd); border-radius: 99px; cursor: pointer; margin-left: auto; }
         .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--tx); color: var(--card); display: grid; place-items: center; font-size: 9px; font-weight: 600; overflow: hidden; }
         .avatar img { width: 100%; height: 100%; object-fit: cover; }
         .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--gn); }
@@ -1650,7 +1651,7 @@ func pageHTML() -> String {
         .spotify-name { font-size: 12px; font-weight: 500; }
         .theme-toggle { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 1.5px solid var(--tx); background: linear-gradient(90deg,var(--tx) 50%,transparent 50%); cursor: pointer; }
         .outline { padding: 6px 13px; border: 1px solid var(--bd); border-radius: 8px; background: var(--card); font-size: 12.5px; font-weight: 500; }
-        .layout { padding: 18px 368px 28px 348px; max-width: 1680px; margin: 0 auto; }
+        .layout { padding: 18px 368px 112px 348px; max-width: 1680px; margin: 0 auto; }
         .stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
         .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .card { background: var(--card); border: 1px solid var(--bd); border-radius: 12px; padding: 16px 18px; }
@@ -1686,7 +1687,7 @@ func pageHTML() -> String {
         .event-type { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; color: var(--gy); text-transform: uppercase; }
         .event.spotify .event-type, .event.track .event-type { color: var(--gn); } .event.needle .event-type { color: var(--acc); } .event.settings .event-type { color: var(--pu); } .event.error .event-type { color: var(--rd); }
         .event-msg { font-size: 12.5px; }
-        .rail { position: fixed; top: 76px; bottom: 18px; overflow: auto; padding: 16px; z-index: 4; }
+        .rail { position: fixed; top: 76px; bottom: 92px; overflow: auto; padding: 16px; z-index: 4; }
         .left-rail { display: flex; flex-direction: column; gap: 12px; }
         .right-rail { display: flex; flex-direction: column; gap: 14px; }
         .left-rail { left: 24px; width: 300px; }
@@ -1711,19 +1712,12 @@ func pageHTML() -> String {
         .field label { font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
         .field input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px; font: 500 12.5px 'IBM Plex Mono', monospace; }
         .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
-        @media (max-width: 1200px) { .layout { padding: 18px 24px 28px; } .rail { position: static; max-height: none; } .now-header { display: none; } }
+        @media (max-width: 1200px) { .layout { padding: 18px 24px 112px; } .rail { position: static; max-height: none; } .bottom-player { grid-template-columns: 1fr; } .bottom-spacer { display: none; } }
       </style>
     </head>
     <body>
       <header class="header">
         <div class="logo">Vinyl Sync<span>.</span></div>
-        <div class="now-header">
-          <div class="art-md" id="nowArt"></div>
-          <div class="now-copy">
-            <div class="now-line"><div class="now-title" id="nowTitle"></div><div class="now-sub" id="nowSub"></div></div>
-            <div class="progress-row"><div class="time" id="nowElapsed"></div><div class="mini-progress"><div class="fill" id="nowFill"></div></div><div class="time" id="nowDur"></div></div>
-          </div>
-        </div>
         <div class="spotify-chip" id="spotifyChip" onclick="connectSpotifyIfNeeded()" title="Spotify">
           <div class="avatar" id="spotifyAvatar"></div><div class="dot" id="spotifyDot"></div><div class="spotify-name" id="spotifyName">Spotify</div>
         </div>
@@ -1803,6 +1797,17 @@ func pageHTML() -> String {
           <div class="settings-actions"><button class="secondary" onclick="resetSettings()">Reset</button><button class="primary" onclick="saveSyncSettings()">Save settings</button></div>
         </aside>
       </main>
+      <footer class="bottom-player">
+        <div class="bottom-spacer"></div>
+        <div class="now-main">
+          <div class="art-md" id="nowArt"></div>
+          <div class="now-copy">
+            <div class="now-line"><div class="now-title" id="nowTitle"></div><div class="now-sub" id="nowSub"></div></div>
+            <div class="progress-row"><div class="time" id="nowElapsed"></div><div class="mini-progress"><div class="fill" id="nowFill"></div></div><div class="time" id="nowDur"></div></div>
+          </div>
+        </div>
+        <div class="bottom-spacer"></div>
+      </footer>
       <script>
         let releases = [];
         let activeAlbum = null;
