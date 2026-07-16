@@ -29,3 +29,4 @@ jobs:
         with:
           name: vinyl-sync-windows-agent
           path: publish/windows-agent
+          retention-days: 7
