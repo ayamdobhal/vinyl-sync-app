@@ -177,7 +177,8 @@ final class SpotifyClient {
   }
 
   func searchAlbums(query: String) throws -> [[String: Any]] {
-    let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+    let queryCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    let encoded = query.addingPercentEncoding(withAllowedCharacters: queryCharacters) ?? query
     let json = try api("GET", "/search?q=\(encoded)&type=album&limit=8")
     let albums = ((json["albums"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
     return albums.map { album in
@@ -216,6 +217,27 @@ final class SpotifyClient {
       }
     ]
     return (sidePlan, albumPayload)
+  }
+
+  func trackURI(isrc: String, title: String, artist: String) throws -> String {
+    let query: String
+    if !isrc.isEmpty {
+      query = "isrc:\(isrc)"
+    } else {
+      query = "track:\"\(title)\" artist:\"\(artist)\""
+    }
+    let queryCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+    let encoded = query.addingPercentEncoding(withAllowedCharacters: queryCharacters) ?? query
+    let json = try api("GET", "/search?q=\(encoded)&type=track&limit=5")
+    let items = ((json["tracks"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+    guard let uri = items.first?["uri"] as? String, !uri.isEmpty else {
+      throw NSError(
+        domain: "Spotify",
+        code: 4,
+        userInfo: [NSLocalizedDescriptionKey: "Spotify track not found for \(artist) — \(title)."]
+      )
+    }
+    return uri
   }
 
   func play(uri: String, positionMs: Int, reason: String) {
@@ -905,6 +927,12 @@ final class CoordinatorServer {
   private let state = StateStore()
   private let spotify = SpotifyClient()
   private let discogs = DiscogsClient()
+  private lazy var shazam = ShazamRecognizer { [weak self] match in
+    self?.handleShazamMatch(match)
+  }
+  private let shazamPlaybackLock = NSLock()
+  private var lastShazamPlaybackID = ""
+  private var lastShazamPlaybackAt = Date.distantPast
 
   init(port: UInt16) throws {
     self.port = NWEndpoint.Port(rawValue: port)!
@@ -1187,6 +1215,7 @@ final class CoordinatorServer {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
       guard error == nil, let data, !data.isEmpty else {
         self.state.disconnectAudio()
+        self.shazam.disconnect()
         connection.cancel()
         return
       }
@@ -1204,6 +1233,7 @@ final class CoordinatorServer {
             self.handleAudio(parsed.frame.payload)
           case 8:
             self.state.disconnectAudio()
+            self.shazam.disconnect()
             connection.cancel()
             return
           default:
@@ -1213,12 +1243,14 @@ final class CoordinatorServer {
       } catch {
         print("websocket parse error: \(error.localizedDescription)")
         self.state.disconnectAudio()
+        self.shazam.disconnect()
         connection.cancel()
         return
       }
 
       if isComplete {
         self.state.disconnectAudio()
+        self.shazam.disconnect()
         connection.cancel()
       } else {
         self.readWebSocketFrames(connection: connection, buffer: nextBuffer)
@@ -1228,10 +1260,12 @@ final class CoordinatorServer {
 
   private func handleHello(_ payload: Data) {
     guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
+    let sampleRate = json["sampleRate"] as? Int ?? 0
     state.receiveHello(
       deviceName: json["deviceName"] as? String ?? "unknown",
-      sampleRate: json["sampleRate"] as? Int ?? 0
+      sampleRate: sampleRate
     )
+    shazam.configure(sampleRate: sampleRate)
   }
 
   private func handleAudio(_ payload: Data) {
@@ -1246,8 +1280,39 @@ final class CoordinatorServer {
     }
 
     let rms = sampleCount == 0 ? 0 : sqrt(sum / Float(sampleCount))
+    shazam.receive(float32MonoPCM: payload)
     if let request = state.receiveAudio(sampleCount: sampleCount, rms: rms) {
       schedulePlayback(request)
+    }
+  }
+
+  private func handleShazamMatch(_ match: ShazamMatchResult) {
+    let identity = match.shazamID.isEmpty ? "\(match.artist)|\(match.title)" : match.shazamID
+    shazamPlaybackLock.lock()
+    let recentlyPlayed = identity == lastShazamPlaybackID
+      && Date().timeIntervalSince(lastShazamPlaybackAt) < 30
+    if !recentlyPlayed {
+      lastShazamPlaybackID = identity
+      lastShazamPlaybackAt = Date()
+    }
+    shazamPlaybackLock.unlock()
+    guard !recentlyPlayed else { return }
+
+    DispatchQueue.global(qos: .userInitiated).async { [spotify] in
+      do {
+        let uri = try spotify.trackURI(
+          isrc: match.isrc,
+          title: match.title,
+          artist: match.artist
+        )
+        spotify.play(
+          uri: uri,
+          positionMs: Int(max(0, match.predictedOffsetSeconds) * 1000),
+          reason: "Shazam \(match.artist) — \(match.title)"
+        )
+      } catch {
+        print("Shazam match could not be mapped to Spotify: \(error.localizedDescription)")
+      }
     }
   }
 
@@ -1284,9 +1349,41 @@ final class CoordinatorServer {
       "needleDropAt": snapshot.needleDropAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
       "event": snapshot.event,
       "pendingTrackIndex": snapshot.pendingTrackIndex.map { $0 as Any } ?? NSNull(),
+      "shazam": shazamPayload(),
       "spotify": spotifyPayload(),
       "discogs": discogsPayload()
     ]
+  }
+
+  private func shazamPayload() -> [String: Any] {
+    let status = shazam.status()
+    var payload: [String: Any] = [
+      "available": status.available,
+      "enabled": status.enabled,
+      "state": status.state,
+      "sampleRate": status.sampleRate,
+      "submittedFrames": status.submittedFrames,
+      "matches": status.matches,
+      "error": status.error
+    ]
+    if let match = status.lastMatch {
+      payload["lastMatch"] = [
+        "shazamID": match.shazamID,
+        "title": match.title,
+        "artist": match.artist,
+        "isrc": match.isrc,
+        "artworkURL": match.artworkURL,
+        "webURL": match.webURL,
+        "appleMusicURL": match.appleMusicURL,
+        "matchOffsetSeconds": match.matchOffsetSeconds,
+        "predictedOffsetSeconds": match.predictedOffsetSeconds,
+        "frequencySkew": match.frequencySkew,
+        "matchedAt": ISO8601DateFormatter().string(from: match.matchedAt)
+      ] as [String: Any]
+    } else {
+      payload["lastMatch"] = NSNull()
+    }
+    return payload
   }
 
   private func settingsPayload(_ settings: SyncSettings) -> [String: Any] {
@@ -1811,7 +1908,7 @@ func pageHTML() -> String {
         </aside>
         <section class="stack">
           <div class="card">
-            <div class="card-title"><span>Audio stream</span><span class="badge" id="streamBadge"><span class="dot"></span>Waiting</span><div class="device"><div class="device-name" id="deviceName">none</div><div class="khz" id="khz">-- kHz</div></div></div>
+            <div class="card-title"><span>Audio stream</span><span class="badge" id="streamBadge"><span class="dot"></span>Waiting</span><span class="badge" id="shazamBadge">Shazam waiting</span><div class="device"><div class="device-name" id="deviceName">none</div><div class="khz" id="khz">-- kHz</div></div></div>
             <div class="chart-panel">
               <div class="chart-head"><div class="chart-label">RMS</div><div class="chart-value" id="rmsValue">0.00000</div><div class="chart-frames" id="framesLabel">frames 0</div></div>
               <canvas class="rms-canvas" id="rmsGraph"></canvas>
@@ -1876,6 +1973,7 @@ func pageHTML() -> String {
         let selectedReleaseId = null;
         let discSearchTerm = '';
         let lastStatus = null;
+        var lastShazamMatchedAt = '';
         let syncSettings = { spotifyOffsetSeconds: 0, spotifyStartDelaySeconds: 0, activityThreshold: 0.001, silenceThreshold: 0.00045, leadInSilenceSeconds: 0.45, transitionSilenceSeconds: 1.6, transitionWindowSeconds: 35 };
         const rmsHistory = [];
         const eventLog = [];
@@ -2083,6 +2181,10 @@ func pageHTML() -> String {
           const response = await fetch('/status'); const status = await response.json(); lastStatus = status; const side = status.side || { name: '--', tracks: [] };
           pushEvent(status.event); drawRmsGraph(Number(status.rms || 0), syncSettings);
           document.getElementById('streamBadge').className = `badge ${status.audioConnected ? '' : 'bad'}`; document.getElementById('streamBadge').innerHTML = `<span class="dot ${status.audioConnected ? '' : 'bad'}"></span>${status.audioConnected ? 'Connected' : 'Waiting'}`;
+          const shazam = status.shazam || {}; const shazamMatch = shazam.lastMatch || null;
+          const shazamError = Boolean(shazam.error); document.getElementById('shazamBadge').className = `badge ${shazamError ? 'bad' : (shazamMatch ? 'run' : '')}`; document.getElementById('shazamBadge').textContent = shazamError ? 'Shazam error' : (shazamMatch ? `Shazam · ${shazamMatch.title}` : `Shazam ${shazam.state || 'waiting'}`);
+          if (shazamError) pushEvent(`Shazam error: ${shazam.error}`);
+          if (shazamMatch?.matchedAt && shazamMatch.matchedAt !== lastShazamMatchedAt) { lastShazamMatchedAt = shazamMatch.matchedAt; pushEvent(`Shazam matched ${shazamMatch.artist} — ${shazamMatch.title} at ${fmt(shazamMatch.predictedOffsetSeconds)}`); }
           document.getElementById('deviceName').textContent = status.lastDeviceName || 'none'; document.getElementById('khz').textContent = status.sampleRate ? `${(Number(status.sampleRate) / 1000).toFixed(1)} kHz` : '-- kHz'; document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5); document.getElementById('framesLabel').textContent = `frames ${status.frameCount || 0}`; document.getElementById('silenceAxis').textContent = `silence threshold ${Number(syncSettings.silenceThreshold || 0).toFixed(5)}`;
           document.getElementById('modeBadge').textContent = status.mode || 'idle'; document.getElementById('silence').textContent = `${Number(status.silenceSeconds || 0).toFixed(1)} s`; document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no'; document.getElementById('active').className = status.audioActive ? 'good' : '';
           const showSelectedDisc = Boolean(activeAlbum);
@@ -2105,6 +2207,12 @@ func pageHTML() -> String {
             document.getElementById('nowArt').innerHTML = artHTML(activeAlbum?.image);
           } else {
             clearTrackDisplay();
+            if (shazamMatch) {
+              document.getElementById('nowTitle').textContent = shazamMatch.title || '';
+              document.getElementById('nowSub').textContent = shazamMatch.artist || '';
+              document.getElementById('nowElapsed').textContent = fmt(shazamMatch.predictedOffsetSeconds);
+              document.getElementById('nowArt').innerHTML = artHTML(shazamMatch.artworkURL);
+            }
           }
           const offset = Number(syncSettings.spotifyOffsetSeconds || 0); document.getElementById('offsetLabel').textContent = `${offset >= 0 ? '+' : ''}${offset.toFixed(2)} s`;
           const spotify = status.spotify || {}; document.getElementById('spotifyDot').className = `dot ${spotify.authenticated ? '' : 'bad'}`; document.getElementById('spotifyName').textContent = spotify.authenticated ? firstName(spotify.user) : 'Connect'; document.getElementById('spotifyChip').title = spotify.authenticated ? `Spotify connected as ${spotify.user} (${spotify.targetDevice || ''})` : 'Connect Spotify'; document.getElementById('spotifyAvatar').innerHTML = spotify.image ? `<img src="${spotify.image}" alt="">` : initials(spotify.user);
