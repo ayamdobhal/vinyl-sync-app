@@ -1109,11 +1109,6 @@ final class CoordinatorServer {
       return
     }
 
-    if request.method == "GET", request.path == "/sync/settings" {
-      respondJSON(connection: connection, status: 200, body: settingsPayload(state.currentSettings()))
-      return
-    }
-
     if request.method == "GET", request.path == "/api/config" {
       respondJSON(connection: connection, status: 200, body: configPayload())
       return
@@ -1173,137 +1168,6 @@ final class CoordinatorServer {
       return
     }
 
-    if request.method == "GET", request.path == "/spotify/search" {
-      do {
-        let query = request.query["q"] ?? ""
-        respondJSON(connection: connection, status: 200, body: ["albums": try spotify.searchAlbums(query: query)])
-      } catch {
-        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
-      }
-      return
-    }
-
-    if request.method == "GET", request.path == "/discogs/collection" {
-      do {
-        respondJSON(connection: connection, status: 200, body: ["releases": try discogs.collection()])
-      } catch {
-        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
-      }
-      return
-    }
-
-    if request.method == "POST", request.path == "/discogs/load-release" {
-      do {
-        guard let json = try JSONSerialization.jsonObject(with: request.body) as? [String: Any],
-              let id = json["id"] as? Int else {
-          respondJSON(connection: connection, status: 400, body: ["error": "Missing Discogs release id."])
-          return
-        }
-        let release = mergeReleaseWithSpotify(try discogs.release(id: id))
-        if let plan = sidePlan(from: release) {
-          state.configureSide(plan)
-        }
-        respondJSON(connection: connection, status: 200, body: ["ok": true, "release": release])
-      } catch {
-        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
-      }
-      return
-    }
-
-    if request.method == "POST", request.path == "/spotify/load-album" {
-      do {
-        guard let json = try JSONSerialization.jsonObject(with: request.body) as? [String: Any],
-              let id = json["id"] as? String else {
-          respondJSON(connection: connection, status: 400, body: ["error": "Missing album id."])
-          return
-        }
-        let album = try spotify.albumForAlbum(id: id)
-        state.configureSide(album.sidePlan)
-        respondJSON(connection: connection, status: 200, body: [
-          "ok": true,
-          "side": sidePayload(album.sidePlan),
-          "album": album.album
-        ])
-      } catch {
-        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
-      }
-      return
-    }
-
-    if request.method == "GET", request.path == "/side" {
-      let snapshot = state.currentSnapshot()
-      respondJSON(connection: connection, status: 200, body: sidePayload(snapshot.sidePlan))
-      return
-    }
-
-    if request.method == "POST", request.path == "/side" {
-      handleSidePost(request: request, connection: connection)
-      return
-    }
-
-    if request.method == "POST", request.path == "/sync/arm" {
-      state.arm()
-      respondJSON(connection: connection, status: 200, body: ["ok": true])
-      return
-    }
-
-    if request.method == "POST", request.path == "/sync/reset" {
-      state.reset()
-      respondJSON(connection: connection, status: 200, body: ["ok": true])
-      return
-    }
-
-    if request.method == "POST", request.path == "/sync/settings" {
-      do {
-        guard let json = try JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
-          respondJSON(connection: connection, status: 400, body: ["error": "Missing settings payload."])
-          return
-        }
-        let offset = json["spotifyOffsetSeconds"] as? Double
-          ?? (json["spotifyOffsetSeconds"] as? Int).map(Double.init)
-          ?? 0
-        let startDelay = json["spotifyStartDelaySeconds"] as? Double
-          ?? (json["spotifyStartDelaySeconds"] as? Int).map(Double.init)
-          ?? SyncSettings.default.spotifyStartDelaySeconds
-        let activityThreshold = json["activityThreshold"] as? Double
-          ?? (json["activityThreshold"] as? Int).map(Double.init)
-          ?? SyncSettings.default.activityThreshold
-        let silenceThreshold = json["silenceThreshold"] as? Double
-          ?? (json["silenceThreshold"] as? Int).map(Double.init)
-          ?? SyncSettings.default.silenceThreshold
-        let leadInSilenceSeconds = json["leadInSilenceSeconds"] as? Double
-          ?? (json["leadInSilenceSeconds"] as? Int).map(Double.init)
-          ?? SyncSettings.default.leadInSilenceSeconds
-        let transitionSilenceSeconds = json["transitionSilenceSeconds"] as? Double
-          ?? (json["transitionSilenceSeconds"] as? Int).map(Double.init)
-          ?? SyncSettings.default.transitionSilenceSeconds
-        let transitionWindowSeconds = json["transitionWindowSeconds"] as? Double
-          ?? (json["transitionWindowSeconds"] as? Int).map(Double.init)
-          ?? SyncSettings.default.transitionWindowSeconds
-        state.updateSettings(SyncSettings(
-          spotifyOffsetSeconds: max(-30, min(30, offset)),
-          spotifyStartDelaySeconds: max(0, min(10, startDelay)),
-          activityThreshold: max(0.00001, min(0.1, activityThreshold)),
-          silenceThreshold: max(0.00001, min(0.1, silenceThreshold)),
-          leadInSilenceSeconds: max(0.05, min(5, leadInSilenceSeconds)),
-          transitionSilenceSeconds: max(0.2, min(10, transitionSilenceSeconds)),
-          transitionWindowSeconds: max(1, min(120, transitionWindowSeconds))
-        ))
-        respondJSON(connection: connection, status: 200, body: ["ok": true])
-      } catch {
-        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
-      }
-      return
-    }
-
-    if request.method == "POST", request.path == "/sync/next" {
-      if let request = state.nextTrack() {
-        schedulePlayback(request)
-      }
-      respondJSON(connection: connection, status: 200, body: ["ok": true])
-      return
-    }
-
     if request.method == "POST", request.path == "/sync/resync" {
       guard let match = shazam.status().lastMatch else {
         respondJSON(connection: connection, status: 409, body: ["error": "No confirmed Shazam match to resync."])
@@ -1319,19 +1183,6 @@ final class CoordinatorServer {
       shazam.rejectCurrentMatch()
       resetOffsetTracking()
       respondJSON(connection: connection, status: 200, body: ["ok": true])
-      return
-    }
-
-    if request.method == "POST", request.path == "/spotify/play-current" {
-      let snapshot = state.currentSnapshot()
-      if snapshot.sidePlan.tracks.indices.contains(snapshot.currentTrackIndex),
-         let uri = snapshot.sidePlan.tracks[snapshot.currentTrackIndex].uri {
-        let positionMs = Int(max(0, snapshot.currentTrackElapsedSeconds + snapshot.settings.spotifyOffsetSeconds) * 1000)
-        spotify.play(uri: uri, positionMs: positionMs, reason: "manual")
-        respondJSON(connection: connection, status: 200, body: ["ok": true])
-      } else {
-        respondJSON(connection: connection, status: 400, body: ["error": "Current track has no Spotify URI. Load the side from Discogs first."])
-      }
       return
     }
 
@@ -1447,9 +1298,7 @@ final class CoordinatorServer {
     }
 
     let rms = sampleCount == 0 ? 0 : sqrt(sum / Float(sampleCount))
-    if let request = state.receiveAudio(sampleCount: sampleCount, rms: rms) {
-      schedulePlayback(request)
-    }
+    _ = state.receiveAudio(sampleCount: sampleCount, rms: rms)
     let silenceThreshold = Float(state.currentSettings().silenceThreshold)
     if rms > silenceThreshold {
       shazam.receive(float32MonoPCM: payload)
