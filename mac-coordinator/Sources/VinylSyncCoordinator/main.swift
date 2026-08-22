@@ -600,12 +600,12 @@ struct SyncSnapshot {
 final class StateStore {
   private let lock = NSLock()
   private var snapshot = SyncSnapshot()
-  private let settingsURL = URL(fileURLWithPath: ".state/sync-settings.json")
-  private let sideURL = URL(fileURLWithPath: ".state/side-plan.json")
+  private let settingsURL = ConfigStore.shared.stateFileURL("sync-settings.json")
+  private let sideURL = ConfigStore.shared.stateFileURL("side-plan.json")
 
   init() {
-    snapshot.settings = Self.loadSettings(from: settingsURL)
-    snapshot.sidePlan = Self.loadSidePlan(from: sideURL)
+    snapshot.settings = Self.loadSettings(from: settingsURL, legacy: URL(fileURLWithPath: ".state/sync-settings.json"))
+    snapshot.sidePlan = Self.loadSidePlan(from: sideURL, legacy: URL(fileURLWithPath: ".state/side-plan.json"))
     resetLocked(event: "ready")
   }
 
@@ -885,8 +885,8 @@ final class StateStore {
     Int(max(0, seconds + snapshot.settings.spotifyOffsetSeconds) * 1000)
   }
 
-  private static func loadSettings(from url: URL) -> SyncSettings {
-    guard let data = try? Data(contentsOf: url),
+  private static func loadSettings(from url: URL, legacy: URL) -> SyncSettings {
+    guard let data = (try? Data(contentsOf: url)) ?? (try? Data(contentsOf: legacy)),
           let settings = try? JSONDecoder().decode(SyncSettings.self, from: data) else {
       return .default
     }
@@ -900,8 +900,8 @@ final class StateStore {
     }
   }
 
-  private static func loadSidePlan(from url: URL) -> SidePlan {
-    guard let data = try? Data(contentsOf: url),
+  private static func loadSidePlan(from url: URL, legacy: URL) -> SidePlan {
+    guard let data = (try? Data(contentsOf: url)) ?? (try? Data(contentsOf: legacy)),
           let plan = try? JSONDecoder().decode(SidePlan.self, from: data),
           !plan.tracks.isEmpty else {
       return .aThousandSunsSideA
