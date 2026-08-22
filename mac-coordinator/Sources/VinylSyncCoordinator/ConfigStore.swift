@@ -7,6 +7,8 @@ final class ConfigStore {
   private struct StoredConfig: Codable {
     var spotifyClientId: String?
     var spotifyRedirectUri: String?
+    var spotifyTargetDeviceId: String?
+    var spotifyTargetDeviceName: String?
     var discogsUsername: String?
   }
 
@@ -47,6 +49,14 @@ final class ConfigStore {
     value(\.spotifyRedirectUri, env: "VINYL_SYNC_SPOTIFY_REDIRECT_URI") ?? "http://127.0.0.1:4739/callback"
   }
 
+  var spotifyTargetDeviceId: String {
+    value(\.spotifyTargetDeviceId, env: "VINYL_SYNC_SPOTIFY_DEVICE_ID") ?? ""
+  }
+
+  var spotifyTargetDeviceName: String {
+    value(\.spotifyTargetDeviceName, env: "VINYL_SYNC_SPOTIFY_DEVICE_NAME") ?? ""
+  }
+
   var discogsToken: String {
     keychainRead(account: "discogs-token") ?? nonEmpty(environment["DISCOGS_TOKEN"]) ?? ""
   }
@@ -59,12 +69,16 @@ final class ConfigStore {
     spotifyClientId: String?,
     spotifyClientSecret: String?,
     spotifyRedirectUri: String?,
+    spotifyTargetDeviceId: String?,
+    spotifyTargetDeviceName: String?,
     discogsToken: String?,
     discogsUsername: String?
   ) {
     lock.lock()
     if let spotifyClientId { stored.spotifyClientId = spotifyClientId }
     if let spotifyRedirectUri { stored.spotifyRedirectUri = spotifyRedirectUri }
+    if let spotifyTargetDeviceId { stored.spotifyTargetDeviceId = spotifyTargetDeviceId }
+    if let spotifyTargetDeviceName { stored.spotifyTargetDeviceName = spotifyTargetDeviceName }
     if let discogsUsername { stored.discogsUsername = discogsUsername }
     let snapshot = stored
     lock.unlock()

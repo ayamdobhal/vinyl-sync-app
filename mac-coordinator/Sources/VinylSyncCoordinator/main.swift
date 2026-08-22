@@ -88,7 +88,7 @@ struct SpotifyStatus {
   var authenticated = false
   var user = "--"
   var image = ""
-  var targetDevice = "CUTE-GAMING"
+  var targetDevice = "Not selected"
   var lastAction = "waiting"
   var error = ""
 }
@@ -103,7 +103,8 @@ final class SpotifyClient {
   private var clientId: String { ConfigStore.shared.spotifyClientId }
   private var clientSecret: String { ConfigStore.shared.spotifyClientSecret }
   private var redirectUri: String { ConfigStore.shared.spotifyRedirectUri }
-  private let targetDeviceName = "CUTE-GAMING"
+  private var targetDeviceIdValue: String { ConfigStore.shared.spotifyTargetDeviceId }
+  private var targetDeviceName: String { ConfigStore.shared.spotifyTargetDeviceName }
   private let tokenURL = ConfigStore.shared.stateFileURL("spotify-token.json")
   private let lock = NSLock()
   private var token: Token?
@@ -136,7 +137,7 @@ final class SpotifyClient {
       authenticated: token != nil,
       user: user,
       image: image,
-      targetDevice: targetDeviceName,
+      targetDevice: targetDeviceName.isEmpty ? "Not selected" : targetDeviceName,
       lastAction: lastAction,
       error: lastError
     )
@@ -237,6 +238,20 @@ final class SpotifyClient {
     return uri
   }
 
+  func devices() throws -> [[String: Any]] {
+    let json = try api("GET", "/me/player/devices")
+    let devices = json["devices"] as? [[String: Any]] ?? []
+    return devices.map {
+      [
+        "id": $0["id"] as? String ?? "",
+        "name": $0["name"] as? String ?? "Unknown device",
+        "type": $0["type"] as? String ?? "",
+        "isActive": $0["is_active"] as? Bool ?? false,
+        "isRestricted": $0["is_restricted"] as? Bool ?? false
+      ]
+    }
+  }
+
   func play(uri: String, positionMs: Int, reason: String) {
     DispatchQueue.global(qos: .userInitiated).async {
       do {
@@ -255,17 +270,24 @@ final class SpotifyClient {
   }
 
   private func targetDeviceId() throws -> String {
-    let json = try api("GET", "/me/player/devices")
-    let devices = json["devices"] as? [[String: Any]] ?? []
-    if let exact = devices.first(where: { ($0["name"] as? String) == targetDeviceName }),
+    let devices = try devices()
+    if !targetDeviceIdValue.isEmpty,
+       let exact = devices.first(where: { ($0["id"] as? String) == targetDeviceIdValue }),
        let id = exact["id"] as? String {
       return id
     }
-    if let active = devices.first(where: { ($0["is_active"] as? Bool) == true }),
+    if !targetDeviceName.isEmpty,
+       let exact = devices.first(where: { ($0["name"] as? String) == targetDeviceName }),
+       let id = exact["id"] as? String {
+      return id
+    }
+    if targetDeviceIdValue.isEmpty, targetDeviceName.isEmpty,
+       let active = devices.first(where: { ($0["isActive"] as? Bool) == true }),
        let id = active["id"] as? String {
       return id
     }
-    throw NSError(domain: "Spotify", code: 2, userInfo: [NSLocalizedDescriptionKey: "Spotify device \(targetDeviceName) not found. Keep Spotify Desktop open on the PC."])
+    let requested = targetDeviceName.isEmpty ? "selected device" : targetDeviceName
+    throw NSError(domain: "Spotify", code: 2, userInfo: [NSLocalizedDescriptionKey: "Spotify \(requested) is unavailable. Open Spotify on the target device or choose another device in Settings."])
   }
 
   private func loadProfile() {
@@ -1010,6 +1032,8 @@ final class CoordinatorServer {
         spotifyClientId: field("spotifyClientId"),
         spotifyClientSecret: field("spotifyClientSecret").flatMap { $0.isEmpty ? nil : $0 },
         spotifyRedirectUri: field("spotifyRedirectUri"),
+        spotifyTargetDeviceId: field("spotifyTargetDeviceId"),
+        spotifyTargetDeviceName: field("spotifyTargetDeviceName"),
         discogsToken: field("discogsToken").flatMap { $0.isEmpty ? nil : $0 },
         discogsUsername: field("discogsUsername")
       )
@@ -1023,6 +1047,15 @@ final class CoordinatorServer {
         return
       }
       respondRedirect(connection: connection, url: url.absoluteString)
+      return
+    }
+
+    if request.method == "GET", request.path == "/spotify/devices" {
+      do {
+        respondJSON(connection: connection, status: 200, body: ["devices": try spotify.devices()])
+      } catch {
+        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
+      }
       return
     }
 
@@ -1492,6 +1525,8 @@ final class CoordinatorServer {
     return [
       "spotifyClientId": config.spotifyClientId,
       "spotifyRedirectUri": config.spotifyRedirectUri,
+      "spotifyTargetDeviceId": config.spotifyTargetDeviceId,
+      "spotifyTargetDeviceName": config.spotifyTargetDeviceName,
       "discogsUsername": config.discogsUsername,
       "spotifyClientSecretSet": !config.spotifyClientSecret.isEmpty,
       "discogsTokenSet": !config.discogsToken.isEmpty
@@ -1945,7 +1980,7 @@ func pageHTML() -> String {
         .settings-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
         .field { display: grid; gap: 6px; }
         .field label { font-size: 11px; font-weight: 600; color: var(--sub); text-transform: uppercase; letter-spacing: 0.04em; }
-        .field input { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px; font: 500 12.5px 'IBM Plex Mono', monospace; }
+        .field input, .field select { width: 100%; background: var(--p2); border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px; font: 500 12.5px 'IBM Plex Mono', monospace; }
         .settings-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
         @media (max-width: 1200px) { .layout { padding: 18px 24px 112px; } .rail { position: static; max-height: none; } }
       </style>
@@ -2037,6 +2072,7 @@ func pageHTML() -> String {
             <div class="field"><label>Spotify client ID</label><input id="cfgSpotifyClientId" type="text" autocomplete="off" spellcheck="false"></div>
             <div class="field"><label>Spotify client secret</label><input id="cfgSpotifySecret" type="password" autocomplete="new-password"></div>
             <div class="field"><label>Spotify redirect URI</label><input id="cfgRedirectUri" type="text" autocomplete="off" spellcheck="false"></div>
+            <div class="field"><label>Spotify playback device</label><select id="cfgSpotifyDevice"><option value="">Connect Spotify to load devices</option></select></div>
             <div class="field"><label>Discogs token</label><input id="cfgDiscogsToken" type="password" autocomplete="new-password"></div>
             <div class="field"><label>Discogs username</label><input id="cfgDiscogsUsername" type="text" autocomplete="off" spellcheck="false"></div>
           </div>
@@ -2178,10 +2214,43 @@ func pageHTML() -> String {
           document.getElementById('cfgDiscogsUsername').value = config.discogsUsername || '';
           document.getElementById('cfgSpotifySecret').placeholder = config.spotifyClientSecretSet ? 'saved' : 'not set';
           document.getElementById('cfgDiscogsToken').placeholder = config.discogsTokenSet ? 'saved' : 'not set';
+          await loadSpotifyDevices(config);
+        }
+        async function loadSpotifyDevices(config) {
+          const select = document.getElementById('cfgSpotifyDevice');
+          select.innerHTML = '';
+          if (config.spotifyTargetDeviceId) {
+            const saved = document.createElement('option');
+            saved.value = config.spotifyTargetDeviceId;
+            saved.dataset.name = config.spotifyTargetDeviceName || 'Saved device';
+            saved.textContent = `${saved.dataset.name} (saved)`;
+            saved.selected = true;
+            select.appendChild(saved);
+          }
+          const response = await fetch('/spotify/devices');
+          if (response.ok) {
+            const data = await response.json();
+            for (const device of data.devices || []) {
+              let option = Array.from(select.options).find((item) => item.value === device.id);
+              if (!option) { option = document.createElement('option'); select.appendChild(option); }
+              option.value = device.id;
+              option.dataset.name = device.name || 'Unknown device';
+              option.textContent = `${option.dataset.name}${device.isActive ? ' · active' : ''}${device.isRestricted ? ' · restricted' : ''}`;
+              option.selected = device.id === config.spotifyTargetDeviceId;
+            }
+          }
+          if (!select.options.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No Spotify devices available';
+            select.appendChild(option);
+          }
         }
         async function saveCredentials() {
           const value = (id) => document.getElementById(id).value.trim();
-          const body = { spotifyClientId: value('cfgSpotifyClientId'), spotifyRedirectUri: value('cfgRedirectUri'), discogsUsername: value('cfgDiscogsUsername') };
+          const device = document.getElementById('cfgSpotifyDevice');
+          const selectedDevice = device.options[device.selectedIndex];
+          const body = { spotifyClientId: value('cfgSpotifyClientId'), spotifyRedirectUri: value('cfgRedirectUri'), spotifyTargetDeviceId: device.value, spotifyTargetDeviceName: selectedDevice?.dataset.name || '', discogsUsername: value('cfgDiscogsUsername') };
           if (value('cfgSpotifySecret')) body.spotifyClientSecret = value('cfgSpotifySecret');
           if (value('cfgDiscogsToken')) body.discogsToken = value('cfgDiscogsToken');
           const response = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
