@@ -916,8 +916,8 @@ final class CoordinatorServer {
   private let state = StateStore()
   private let spotify = SpotifyClient()
   private let discogs = DiscogsClient()
-  private lazy var shazam = ShazamRecognizer { [weak self] match in
-    self?.handleShazamMatch(match)
+  private lazy var shazam = ShazamRecognizer { [weak self] match, isNewTrack in
+    self?.handleShazamMatch(match, isNewTrack: isNewTrack)
   }
   private let shazamPlaybackLock = NSLock()
   private var lastShazamPlaybackID = ""
@@ -1300,7 +1300,8 @@ final class CoordinatorServer {
     }
   }
 
-  private func handleShazamMatch(_ match: ShazamMatchResult) {
+  private func handleShazamMatch(_ match: ShazamMatchResult, isNewTrack: Bool) {
+    guard isNewTrack else { return }
     let identity = match.shazamID.isEmpty ? "\(match.artist)|\(match.title)" : match.shazamID
     shazamPlaybackLock.lock()
     let recentlyPlayed = identity == lastShazamPlaybackID
@@ -1378,6 +1379,15 @@ final class CoordinatorServer {
       "sampleRate": status.sampleRate,
       "submittedFrames": status.submittedFrames,
       "matches": status.matches,
+      "noMatches": status.noMatches,
+      "transientErrors": status.transientErrors,
+      "candidateTitle": status.candidateTitle,
+      "candidateArtist": status.candidateArtist,
+      "candidateMatches": status.candidateMatches,
+      "confirmedAt": status.confirmedAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+      "lastSuccessfulMatchAt": status.lastSuccessfulMatchAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
+      "lastError": status.lastError,
+      "lastErrorAt": status.lastErrorAt.map { ISO8601DateFormatter().string(from: $0) } ?? "",
       "error": status.error
     ]
     if let match = status.lastMatch {
