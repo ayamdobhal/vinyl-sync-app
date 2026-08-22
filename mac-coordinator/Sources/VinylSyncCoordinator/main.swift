@@ -93,6 +93,17 @@ struct SpotifyStatus {
   var error = ""
 }
 
+struct SpotifyTrackResolution {
+  var uri: String
+  var title: String
+  var artist: String
+  var durationSeconds: Double
+  var albumId: String
+  var albumName: String
+  var albumArtists: String
+  var albumImage: String
+}
+
 final class SpotifyClient {
   private struct Token: Codable {
     var accessToken: String
@@ -218,6 +229,10 @@ final class SpotifyClient {
   }
 
   func trackURI(isrc: String, title: String, artist: String) throws -> String {
+    try trackResolution(isrc: isrc, title: title, artist: artist).uri
+  }
+
+  func trackResolution(isrc: String, title: String, artist: String) throws -> SpotifyTrackResolution {
     let query: String
     if !isrc.isEmpty {
       query = "isrc:\(isrc)"
@@ -228,14 +243,31 @@ final class SpotifyClient {
     let encoded = query.addingPercentEncoding(withAllowedCharacters: queryCharacters) ?? query
     let json = try api("GET", "/search?q=\(encoded)&type=track&limit=5")
     let items = ((json["tracks"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
-    guard let uri = items.first?["uri"] as? String, !uri.isEmpty else {
+    guard let track = items.first,
+          let uri = track["uri"] as? String, !uri.isEmpty else {
       throw NSError(
         domain: "Spotify",
         code: 4,
         userInfo: [NSLocalizedDescriptionKey: "Spotify track not found for \(artist) — \(title)."]
       )
     }
-    return uri
+    let album = track["album"] as? [String: Any] ?? [:]
+    let trackArtists = ((track["artists"] as? [[String: Any]]) ?? [])
+      .compactMap { $0["name"] as? String }
+      .joined(separator: ", ")
+    let albumArtists = ((album["artists"] as? [[String: Any]]) ?? [])
+      .compactMap { $0["name"] as? String }
+      .joined(separator: ", ")
+    return SpotifyTrackResolution(
+      uri: uri,
+      title: track["name"] as? String ?? title,
+      artist: trackArtists.isEmpty ? artist : trackArtists,
+      durationSeconds: Double(track["duration_ms"] as? Int ?? 0) / 1000,
+      albumId: album["id"] as? String ?? "",
+      albumName: album["name"] as? String ?? "",
+      albumArtists: albumArtists,
+      albumImage: (((album["images"] as? [[String: Any]]) ?? []).first?["url"] as? String) ?? ""
+    )
   }
 
   func devices() throws -> [[String: Any]] {
@@ -420,18 +452,28 @@ final class DiscogsClient {
   private var username: String { ConfigStore.shared.discogsUsername }
   private let lock = NSLock()
   private var lastError = ""
+  private var cachedCollection: [[String: Any]] = []
+  private var cachedCollectionAt = Date.distantPast
+  private var cachedCollectionUsername = ""
 
   func status() -> DiscogsStatus {
     lock.lock()
     let error = lastError
     lock.unlock()
-    return DiscogsStatus(configured: !token.isEmpty, user: username, error: error)
+    return DiscogsStatus(configured: !token.isEmpty && !username.isEmpty, user: username, error: error)
   }
 
   func collection() throws -> [[String: Any]] {
-    guard !token.isEmpty else {
-      throw NSError(domain: "Discogs", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing DISCOGS_TOKEN."])
+    guard !token.isEmpty, !username.isEmpty else {
+      throw NSError(domain: "Discogs", code: 1, userInfo: [NSLocalizedDescriptionKey: "Configure a Discogs username and token."])
     }
+
+    lock.lock()
+    let cached = cachedCollection
+    let cacheAge = Date().timeIntervalSince(cachedCollectionAt)
+    lock.unlock()
+    let cacheMatchesUser = cachedCollectionUsername == username
+    if !cached.isEmpty, cacheAge < 600, cacheMatchesUser { return cached }
 
     var page = 1
     var releases: [[String: Any]] = []
@@ -447,8 +489,39 @@ final class DiscogsClient {
       page += 1
     }
 
-    setError("")
+    lock.lock()
+    cachedCollection = releases
+    cachedCollectionAt = Date()
+    cachedCollectionUsername = username
+    lastError = ""
+    lock.unlock()
     return releases
+  }
+
+  func matchOwnedRelease(album: String, artist: String) throws -> [String: Any]? {
+    guard !album.isEmpty else { return nil }
+    let releases = try collection()
+    let wantedAlbum = normalized(album)
+    let wantedArtist = normalized(artist)
+    let titleMatches = releases.filter { normalized($0["title"] as? String ?? "") == wantedAlbum }
+    let exact = titleMatches.filter {
+      let releaseArtist = normalized($0["artists"] as? String ?? "")
+      return wantedArtist.isEmpty || releaseArtist == wantedArtist
+        || releaseArtist.contains(wantedArtist) || wantedArtist.contains(releaseArtist)
+    }
+    let candidates = exact.isEmpty ? titleMatches : exact
+    guard candidates.count == 1, var result = candidates.first else {
+      return candidates.isEmpty ? nil : [
+        "ambiguous": true,
+        "candidateCount": candidates.count,
+        "album": album,
+        "artist": artist
+      ]
+    }
+    result["ambiguous"] = false
+    result["candidateCount"] = 1
+    result["confidence"] = exact.isEmpty ? "title" : "exact"
+    return result
   }
 
   func release(id: Int) throws -> [String: Any] {
@@ -507,8 +580,30 @@ final class DiscogsClient {
       "title": basic["title"] as? String ?? "Untitled",
       "artists": artists,
       "year": basic["year"] as? Int ?? 0,
-      "thumb": basic["thumb"] as? String ?? basic["cover_image"] as? String ?? ""
+      "thumb": basic["thumb"] as? String ?? basic["cover_image"] as? String ?? "",
+      "country": basic["country"] as? String ?? "",
+      "labels": ((basic["labels"] as? [[String: Any]]) ?? []).map {
+        ["name": $0["name"] as? String ?? "", "catalogNumber": $0["catno"] as? String ?? ""]
+      },
+      "formats": ((basic["formats"] as? [[String: Any]]) ?? []).map {
+        [
+          "name": $0["name"] as? String ?? "",
+          "quantity": $0["qty"] as? String ?? "",
+          "text": $0["text"] as? String ?? "",
+          "descriptions": $0["descriptions"] as? [String] ?? []
+        ] as [String: Any]
+      },
+      "resourceURL": basic["resource_url"] as? String ?? ""
     ]
+  }
+
+  private func normalized(_ value: String) -> String {
+    value
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
+      .replacingOccurrences(of: "\\s*\\(\\d+\\)$", with: "", options: .regularExpression)
+      .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private func api(_ path: String) throws -> [String: Any] {
@@ -945,6 +1040,11 @@ final class CoordinatorServer {
   private let shazamPlaybackLock = NSLock()
   private var currentShazamPlaybackID = ""
   private var currentShazamPlaybackURI = ""
+  private let metadataLock = NSLock()
+  private var resolvedTrackPayload: [String: Any]?
+  private var pressingState = "waiting"
+  private var pressingMatch: [String: Any]?
+  private var pressingError = ""
 
   init(port: UInt16) throws {
     self.port = NWEndpoint.Port(rawValue: port)!
@@ -1350,7 +1450,7 @@ final class CoordinatorServer {
       DispatchQueue.global(qos: .userInitiated).async { [weak self, spotify] in
         guard let self else { return }
         do {
-          let uri = try spotify.trackURI(
+          let resolution = try spotify.trackResolution(
             isrc: match.isrc,
             title: match.title,
             artist: match.artist
@@ -1358,13 +1458,15 @@ final class CoordinatorServer {
           guard self.offsetTracker.status().trackIdentity == identity else { return }
           self.shazamPlaybackLock.lock()
           self.currentShazamPlaybackID = identity
-          self.currentShazamPlaybackURI = uri
+          self.currentShazamPlaybackURI = resolution.uri
           self.shazamPlaybackLock.unlock()
+          self.updateResolvedTrack(resolution)
           spotify.play(
-            uri: uri,
+            uri: resolution.uri,
             positionMs: Int(positionSeconds * 1000),
             reason: "Shazam confirmed \(match.artist) — \(match.title)"
           )
+          self.resolvePressing(for: resolution)
         } catch {
           print("Shazam match could not be mapped to Spotify: \(error.localizedDescription)")
         }
@@ -1395,6 +1497,52 @@ final class CoordinatorServer {
     currentShazamPlaybackID = ""
     currentShazamPlaybackURI = ""
     shazamPlaybackLock.unlock()
+    metadataLock.lock()
+    resolvedTrackPayload = nil
+    pressingState = "waiting"
+    pressingMatch = nil
+    pressingError = ""
+    metadataLock.unlock()
+  }
+
+  private func updateResolvedTrack(_ track: SpotifyTrackResolution) {
+    metadataLock.lock()
+    resolvedTrackPayload = [
+      "uri": track.uri,
+      "title": track.title,
+      "artist": track.artist,
+      "durationSeconds": track.durationSeconds,
+      "albumId": track.albumId,
+      "albumName": track.albumName,
+      "albumArtists": track.albumArtists,
+      "albumImage": track.albumImage
+    ]
+    pressingState = discogs.status().configured ? "searching" : "not configured"
+    pressingMatch = nil
+    pressingError = ""
+    metadataLock.unlock()
+  }
+
+  private func resolvePressing(for track: SpotifyTrackResolution) {
+    guard discogs.status().configured else { return }
+    do {
+      let match = try discogs.matchOwnedRelease(album: track.albumName, artist: track.albumArtists)
+      metadataLock.lock()
+      pressingMatch = match
+      if match?["ambiguous"] as? Bool == true {
+        pressingState = "ambiguous"
+      } else {
+        pressingState = match == nil ? "not found" : "matched"
+      }
+      pressingError = ""
+      metadataLock.unlock()
+    } catch {
+      metadataLock.lock()
+      pressingState = "unavailable"
+      pressingMatch = nil
+      pressingError = error.localizedDescription
+      metadataLock.unlock()
+    }
   }
 
   private func schedulePlayback(_ request: PlaybackRequest) {
@@ -1432,6 +1580,8 @@ final class CoordinatorServer {
       "pendingTrackIndex": snapshot.pendingTrackIndex.map { $0 as Any } ?? NSNull(),
       "shazam": shazamPayload(),
       "offsetTracking": offsetTrackingPayload(),
+      "nowPlaying": nowPlayingPayload(),
+      "pressing": pressingPayload(),
       "spotify": spotifyPayload(),
       "discogs": discogsPayload()
     ]
@@ -1489,6 +1639,26 @@ final class CoordinatorServer {
       "acceptedObservations": status.acceptedObservations,
       "rejectedObservations": status.rejectedObservations,
       "lastCorrectionAt": status.lastCorrectionAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""
+    ]
+  }
+
+  private func nowPlayingPayload() -> Any {
+    metadataLock.lock()
+    let payload = resolvedTrackPayload
+    metadataLock.unlock()
+    return payload ?? NSNull()
+  }
+
+  private func pressingPayload() -> [String: Any] {
+    metadataLock.lock()
+    let state = pressingState
+    let match = pressingMatch
+    let error = pressingError
+    metadataLock.unlock()
+    return [
+      "state": state,
+      "match": match ?? NSNull(),
+      "error": error
     ]
   }
 
