@@ -919,9 +919,10 @@ final class CoordinatorServer {
   private lazy var shazam = ShazamRecognizer { [weak self] match, isNewTrack in
     self?.handleShazamMatch(match, isNewTrack: isNewTrack)
   }
+  private let offsetTracker = PlaybackOffsetTracker()
   private let shazamPlaybackLock = NSLock()
-  private var lastShazamPlaybackID = ""
-  private var lastShazamPlaybackAt = Date.distantPast
+  private var currentShazamPlaybackID = ""
+  private var currentShazamPlaybackURI = ""
 
   init(port: UInt16) throws {
     self.port = NWEndpoint.Port(rawValue: port)!
@@ -1229,7 +1230,7 @@ final class CoordinatorServer {
     connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
       guard error == nil, let data, !data.isEmpty else {
         self.state.disconnectAudio()
-        self.shazam.disconnect()
+        self.resetShazamPlayback()
         connection.cancel()
         return
       }
@@ -1247,7 +1248,7 @@ final class CoordinatorServer {
             self.handleAudio(parsed.frame.payload)
           case 8:
             self.state.disconnectAudio()
-            self.shazam.disconnect()
+            self.resetShazamPlayback()
             connection.cancel()
             return
           default:
@@ -1257,14 +1258,14 @@ final class CoordinatorServer {
       } catch {
         print("websocket parse error: \(error.localizedDescription)")
         self.state.disconnectAudio()
-        self.shazam.disconnect()
+        self.resetShazamPlayback()
         connection.cancel()
         return
       }
 
       if isComplete {
         self.state.disconnectAudio()
-        self.shazam.disconnect()
+        self.resetShazamPlayback()
         connection.cancel()
       } else {
         self.readWebSocketFrames(connection: connection, buffer: nextBuffer)
@@ -1275,6 +1276,7 @@ final class CoordinatorServer {
   private func handleHello(_ payload: Data) {
     guard let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
     let sampleRate = json["sampleRate"] as? Int ?? 0
+    resetOffsetTracking()
     state.receiveHello(
       deviceName: json["deviceName"] as? String ?? "unknown",
       sampleRate: sampleRate
@@ -1301,34 +1303,60 @@ final class CoordinatorServer {
   }
 
   private func handleShazamMatch(_ match: ShazamMatchResult, isNewTrack: Bool) {
-    guard isNewTrack else { return }
-    let identity = match.shazamID.isEmpty ? "\(match.artist)|\(match.title)" : match.shazamID
-    shazamPlaybackLock.lock()
-    let recentlyPlayed = identity == lastShazamPlaybackID
-      && Date().timeIntervalSince(lastShazamPlaybackAt) < 30
-    if !recentlyPlayed {
-      lastShazamPlaybackID = identity
-      lastShazamPlaybackAt = Date()
-    }
-    shazamPlaybackLock.unlock()
-    guard !recentlyPlayed else { return }
-
-    DispatchQueue.global(qos: .userInitiated).async { [spotify] in
-      do {
-        let uri = try spotify.trackURI(
-          isrc: match.isrc,
-          title: match.title,
-          artist: match.artist
-        )
+    let action = offsetTracker.observe(match, isNewTrack: isNewTrack)
+    switch action {
+    case .none:
+      return
+    case let .start(positionSeconds):
+      let identity = match.identity
+      DispatchQueue.global(qos: .userInitiated).async { [weak self, spotify] in
+        guard let self else { return }
+        do {
+          let uri = try spotify.trackURI(
+            isrc: match.isrc,
+            title: match.title,
+            artist: match.artist
+          )
+          guard self.offsetTracker.status().trackIdentity == identity else { return }
+          self.shazamPlaybackLock.lock()
+          self.currentShazamPlaybackID = identity
+          self.currentShazamPlaybackURI = uri
+          self.shazamPlaybackLock.unlock()
+          spotify.play(
+            uri: uri,
+            positionMs: Int(positionSeconds * 1000),
+            reason: "Shazam confirmed \(match.artist) — \(match.title)"
+          )
+        } catch {
+          print("Shazam match could not be mapped to Spotify: \(error.localizedDescription)")
+        }
+      }
+    case let .correct(positionSeconds):
+      shazamPlaybackLock.lock()
+      let uri = currentShazamPlaybackID == match.identity ? currentShazamPlaybackURI : ""
+      shazamPlaybackLock.unlock()
+      guard !uri.isEmpty else { return }
+      DispatchQueue.global(qos: .userInitiated).async { [spotify] in
         spotify.play(
           uri: uri,
-          positionMs: Int(max(0, match.predictedOffsetSeconds) * 1000),
-          reason: "Shazam \(match.artist) — \(match.title)"
+          positionMs: Int(positionSeconds * 1000),
+          reason: "Shazam drift correction for \(match.artist) — \(match.title)"
         )
-      } catch {
-        print("Shazam match could not be mapped to Spotify: \(error.localizedDescription)")
       }
     }
+  }
+
+  private func resetShazamPlayback() {
+    shazam.disconnect()
+    resetOffsetTracking()
+  }
+
+  private func resetOffsetTracking() {
+    offsetTracker.reset()
+    shazamPlaybackLock.lock()
+    currentShazamPlaybackID = ""
+    currentShazamPlaybackURI = ""
+    shazamPlaybackLock.unlock()
   }
 
   private func schedulePlayback(_ request: PlaybackRequest) {
@@ -1365,6 +1393,7 @@ final class CoordinatorServer {
       "event": snapshot.event,
       "pendingTrackIndex": snapshot.pendingTrackIndex.map { $0 as Any } ?? NSNull(),
       "shazam": shazamPayload(),
+      "offsetTracking": offsetTrackingPayload(),
       "spotify": spotifyPayload(),
       "discogs": discogsPayload()
     ]
@@ -1408,6 +1437,19 @@ final class CoordinatorServer {
       payload["lastMatch"] = NSNull()
     }
     return payload
+  }
+
+  private func offsetTrackingPayload() -> [String: Any] {
+    let status = offsetTracker.status()
+    return [
+      "trackIdentity": status.trackIdentity,
+      "estimatedOffsetSeconds": status.estimatedOffsetSeconds,
+      "observedOffsetSeconds": status.observedOffsetSeconds,
+      "driftSeconds": status.driftSeconds,
+      "acceptedObservations": status.acceptedObservations,
+      "rejectedObservations": status.rejectedObservations,
+      "lastCorrectionAt": status.lastCorrectionAt.map { ISO8601DateFormatter().string(from: $0) } ?? ""
+    ]
   }
 
   private func settingsPayload(_ settings: SyncSettings) -> [String: Any] {

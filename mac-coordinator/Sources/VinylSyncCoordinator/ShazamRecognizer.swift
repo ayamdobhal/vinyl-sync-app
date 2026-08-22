@@ -41,6 +41,7 @@ struct ShazamRecognitionStatus {
   var lastSuccessfulMatchAt: Date?
   var lastError = ""
   var lastErrorAt: Date?
+  var consecutiveErrorBeganAt: Date?
   var error = ""
 }
 
@@ -58,7 +59,6 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
   private var candidateIdentity = ""
   private var candidateFirstSeen = Date.distantPast
   private var confirmedIdentity = ""
-  private var consecutiveErrorBeganAt: Date?
 
   init(onConfirmedMatch: @escaping (ShazamMatchResult, Bool) -> Void) {
     self.onConfirmedMatch = onConfirmedMatch
@@ -121,7 +121,6 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
       self.candidateIdentity = ""
       self.candidateFirstSeen = .distantPast
       self.confirmedIdentity = ""
-      self.consecutiveErrorBeganAt = nil
       self.updateStatus { $0 = ShazamRecognitionStatus() }
     }
   }
@@ -130,7 +129,7 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
     lock.lock()
     var snapshot = statusValue
     let now = Date()
-    if let errorBeganAt = consecutiveErrorBeganAt,
+    if let errorBeganAt = snapshot.consecutiveErrorBeganAt,
        now.timeIntervalSince(errorBeganAt) >= staleAfter,
        snapshot.lastSuccessfulMatchAt.map({ now.timeIntervalSince($0) >= staleAfter }) ?? true {
       snapshot.state = "unavailable"
@@ -179,9 +178,7 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
         $0.transientErrors += 1
         $0.lastError = error.localizedDescription
         $0.lastErrorAt = now
-      }
-      if error != nil && self.consecutiveErrorBeganAt == nil {
-        self.consecutiveErrorBeganAt = now
+        if $0.consecutiveErrorBeganAt == nil { $0.consecutiveErrorBeganAt = now }
       }
     }
   }
@@ -199,7 +196,6 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
     candidateIdentity = ""
     candidateFirstSeen = .distantPast
     confirmedIdentity = ""
-    consecutiveErrorBeganAt = nil
     updateStatus {
       $0 = ShazamRecognitionStatus()
       $0.sampleRate = sampleRate
@@ -210,8 +206,6 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
   private func process(_ result: ShazamMatchResult) {
     let now = result.matchedAt
     let identity = result.identity
-    consecutiveErrorBeganAt = nil
-
     if identity == confirmedIdentity {
       updateStatus {
         $0.matches += 1
@@ -220,6 +214,7 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
         $0.lastSuccessfulMatchAt = now
         $0.state = "confirmed"
         $0.error = ""
+        $0.consecutiveErrorBeganAt = nil
         $0.candidateMatches = 0
         $0.candidateTitle = ""
         $0.candidateArtist = ""
@@ -247,6 +242,7 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
       $0.candidateArtist = result.artist
       $0.state = "candidate"
       $0.error = ""
+      $0.consecutiveErrorBeganAt = nil
       shouldConfirm = $0.candidateMatches >= 2
     }
 
