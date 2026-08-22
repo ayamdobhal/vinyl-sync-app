@@ -29,6 +29,8 @@ struct ShazamRecognitionStatus {
   var state = "waiting"
   var sampleRate = 0
   var submittedFrames: UInt64 = 0
+  var silentFramesSkipped: UInt64 = 0
+  var silentBuffersSkipped: UInt64 = 0
   var matches: UInt64 = 0
   var noMatches: UInt64 = 0
   var transientErrors: UInt64 = 0
@@ -108,6 +110,19 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
       self.updateStatus {
         $0.submittedFrames += UInt64(frameCount)
         if $0.state == "waiting" { $0.state = "listening" }
+      }
+    }
+  }
+
+  func skipSilent(frameCount: Int) {
+    guard frameCount > 0 else { return }
+    queue.async {
+      self.updateStatus {
+        $0.silentFramesSkipped += UInt64(frameCount)
+        $0.silentBuffersSkipped += 1
+        if $0.lastMatch == nil && $0.candidateMatches == 0 {
+          $0.state = "waiting for sound"
+        }
       }
     }
   }

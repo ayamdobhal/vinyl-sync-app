@@ -1329,9 +1329,14 @@ final class CoordinatorServer {
     }
 
     let rms = sampleCount == 0 ? 0 : sqrt(sum / Float(sampleCount))
-    shazam.receive(float32MonoPCM: payload)
     if let request = state.receiveAudio(sampleCount: sampleCount, rms: rms) {
       schedulePlayback(request)
+    }
+    let silenceThreshold = Float(state.currentSettings().silenceThreshold)
+    if rms > silenceThreshold {
+      shazam.receive(float32MonoPCM: payload)
+    } else {
+      shazam.skipSilent(frameCount: sampleCount)
     }
   }
 
@@ -1440,6 +1445,8 @@ final class CoordinatorServer {
       "state": status.state,
       "sampleRate": status.sampleRate,
       "submittedFrames": status.submittedFrames,
+      "silentFramesSkipped": status.silentFramesSkipped,
+      "silentBuffersSkipped": status.silentBuffersSkipped,
       "matches": status.matches,
       "noMatches": status.noMatches,
       "transientErrors": status.transientErrors,
