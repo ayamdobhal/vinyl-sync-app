@@ -5,9 +5,11 @@
   <key>CFBundleDisplayName</key>
   <string>Vinyl Sync Coordinator</string>
   <key>CFBundleExecutable</key>
-  <string>vinyl-sync-coordinator</string>
+  <string>$(EXECUTABLE_NAME)</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.iamdobhal.vinyl-sync</string>
+  <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -15,9 +17,13 @@
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.2.0</string>
+  <string>$(MARKETING_VERSION)</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$(CURRENT_PROJECT_VERSION)</string>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.music</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>LSUIElement</key>
