@@ -100,11 +100,11 @@ final class SpotifyClient {
     var expiresAt: Date
   }
 
-  private let clientId: String
-  private let clientSecret: String
-  private let redirectUri: String
+  private var clientId: String { ConfigStore.shared.spotifyClientId }
+  private var clientSecret: String { ConfigStore.shared.spotifyClientSecret }
+  private var redirectUri: String { ConfigStore.shared.spotifyRedirectUri }
   private let targetDeviceName = "CUTE-GAMING"
-  private let tokenURL = URL(fileURLWithPath: ".state/spotify-token.json")
+  private let tokenURL = ConfigStore.shared.stateFileURL("spotify-token.json")
   private let lock = NSLock()
   private var token: Token?
   private var user = "--"
@@ -113,11 +113,8 @@ final class SpotifyClient {
   private var lastError = ""
 
   init() {
-    let env = loadEnvironment()
-    clientId = env["SPOTIFY_CLIENT_ID"] ?? ""
-    clientSecret = env["SPOTIFY_CLIENT_SECRET"] ?? ""
-    redirectUri = env["VINYL_SYNC_SPOTIFY_REDIRECT_URI"] ?? "http://127.0.0.1:4739/callback"
     token = Self.loadToken(from: tokenURL)
+      ?? Self.loadToken(from: URL(fileURLWithPath: ".state/spotify-token.json"))
     if token != nil {
       _ = refreshIfNeeded()
       loadProfile()
@@ -392,21 +389,15 @@ final class SpotifyClient {
 
 struct DiscogsStatus {
   var configured = false
-  var user = "ayamdobhal"
+  var user = ""
   var error = ""
 }
 
 final class DiscogsClient {
-  private let token: String
-  private let username: String
+  private var token: String { ConfigStore.shared.discogsToken }
+  private var username: String { ConfigStore.shared.discogsUsername }
   private let lock = NSLock()
   private var lastError = ""
-
-  init() {
-    let env = loadEnvironment()
-    token = env["DISCOGS_TOKEN"] ?? ""
-    username = env["DISCOGS_USERNAME"] ?? "ayamdobhal"
-  }
 
   func status() -> DiscogsStatus {
     lock.lock()
@@ -554,9 +545,7 @@ func loadEnvironment() -> [String: String] {
   var values = ProcessInfo.processInfo.environment
   for path in [
     ".env",
-    "../.env",
-    "../../vinyl-shadow_archive_20260707_0232/.env",
-    "/Users/ayamdobhal/Documents/brain/agents/default/discogs-sync/.env"
+    "../.env"
   ] {
     guard let text = try? String(contentsOfFile: path) else { continue }
     for line in text.split(separator: "\n") {
@@ -1002,6 +991,31 @@ final class CoordinatorServer {
       return
     }
 
+    if request.method == "GET", request.path == "/api/config" {
+      respondJSON(connection: connection, status: 200, body: configPayload())
+      return
+    }
+
+    if request.method == "POST", request.path == "/api/config" {
+      guard let json = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] else {
+        respondJSON(connection: connection, status: 400, body: ["error": "Missing config payload."])
+        return
+      }
+      let field = { (key: String) -> String? in
+        (json[key] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      }
+      // Empty secrets mean "keep the stored value" so the form can be saved without retyping them.
+      ConfigStore.shared.update(
+        spotifyClientId: field("spotifyClientId"),
+        spotifyClientSecret: field("spotifyClientSecret").flatMap { $0.isEmpty ? nil : $0 },
+        spotifyRedirectUri: field("spotifyRedirectUri"),
+        discogsToken: field("discogsToken").flatMap { $0.isEmpty ? nil : $0 },
+        discogsUsername: field("discogsUsername")
+      )
+      respondJSON(connection: connection, status: 200, body: configPayload())
+      return
+    }
+
     if request.method == "GET", request.path == "/spotify/login" {
       guard let url = spotify.loginURL() else {
         respondJSON(connection: connection, status: 400, body: ["error": "Missing Spotify config."])
@@ -1418,6 +1432,17 @@ final class CoordinatorServer {
       "redirectUri": spotify.redirectUriValue,
       "lastAction": status.lastAction,
       "error": status.error
+    ]
+  }
+
+  private func configPayload() -> [String: Any] {
+    let config = ConfigStore.shared
+    return [
+      "spotifyClientId": config.spotifyClientId,
+      "spotifyRedirectUri": config.spotifyRedirectUri,
+      "discogsUsername": config.discogsUsername,
+      "spotifyClientSecretSet": !config.spotifyClientSecret.isEmpty,
+      "discogsTokenSet": !config.discogsToken.isEmpty
     ]
   }
 
@@ -1955,6 +1980,16 @@ func pageHTML() -> String {
           </div>
           <div class="caption">Start delay waits before firing Spotify. Position offset seeks into the Spotify track. Needle drop is ignored until lead-in silence is seen.</div>
           <div class="settings-actions"><button class="secondary" onclick="resetSettings()">Reset</button><button class="primary" onclick="saveSyncSettings()">Save settings</button></div>
+          <div class="rail-title">Credentials</div>
+          <div class="settings-grid">
+            <div class="field"><label>Spotify client ID</label><input id="cfgSpotifyClientId" type="text" autocomplete="off" spellcheck="false"></div>
+            <div class="field"><label>Spotify client secret</label><input id="cfgSpotifySecret" type="password" autocomplete="new-password"></div>
+            <div class="field"><label>Spotify redirect URI</label><input id="cfgRedirectUri" type="text" autocomplete="off" spellcheck="false"></div>
+            <div class="field"><label>Discogs token</label><input id="cfgDiscogsToken" type="password" autocomplete="new-password"></div>
+            <div class="field"><label>Discogs username</label><input id="cfgDiscogsUsername" type="text" autocomplete="off" spellcheck="false"></div>
+          </div>
+          <div class="caption">Secrets are stored in the macOS Keychain, never in the app bundle. Saved secrets stay hidden; leave a secret blank to keep the stored value.</div>
+          <div class="settings-actions"><button class="primary" onclick="saveCredentials()">Save credentials</button></div>
         </aside>
       </main>
       <footer class="bottom-player">
@@ -2080,6 +2115,29 @@ func pageHTML() -> String {
           const response = await fetch('/sync/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spotifyOffsetSeconds: value('spotifyOffset'), spotifyStartDelaySeconds: value('spotifyStartDelay'), activityThreshold: value('activityThreshold'), silenceThreshold: value('silenceThreshold'), leadInSilenceSeconds: value('leadInSilenceSeconds'), transitionSilenceSeconds: value('transitionSilenceSeconds'), transitionWindowSeconds: value('transitionWindowSeconds') }) });
           if (!response.ok) alert((await response.json().catch(() => ({ error: 'Could not save settings.' }))).error || 'Could not save settings.');
           await loadSyncSettings();
+          await tick();
+        }
+        async function loadCredentials() {
+          const response = await fetch('/api/config');
+          if (!response.ok) return;
+          const config = await response.json();
+          document.getElementById('cfgSpotifyClientId').value = config.spotifyClientId || '';
+          document.getElementById('cfgRedirectUri').value = config.spotifyRedirectUri || '';
+          document.getElementById('cfgDiscogsUsername').value = config.discogsUsername || '';
+          document.getElementById('cfgSpotifySecret').placeholder = config.spotifyClientSecretSet ? 'saved' : 'not set';
+          document.getElementById('cfgDiscogsToken').placeholder = config.discogsTokenSet ? 'saved' : 'not set';
+        }
+        async function saveCredentials() {
+          const value = (id) => document.getElementById(id).value.trim();
+          const body = { spotifyClientId: value('cfgSpotifyClientId'), spotifyRedirectUri: value('cfgRedirectUri'), discogsUsername: value('cfgDiscogsUsername') };
+          if (value('cfgSpotifySecret')) body.spotifyClientSecret = value('cfgSpotifySecret');
+          if (value('cfgDiscogsToken')) body.discogsToken = value('cfgDiscogsToken');
+          const response = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          if (!response.ok) { alert((await response.json().catch(() => ({ error: 'Could not save credentials.' }))).error || 'Could not save credentials.'); return; }
+          document.getElementById('cfgSpotifySecret').value = '';
+          document.getElementById('cfgDiscogsToken').value = '';
+          pushEvent('Credentials saved');
+          await loadCredentials();
           await tick();
         }
         async function resetSettings() {
@@ -2218,7 +2276,7 @@ func pageHTML() -> String {
           const spotify = status.spotify || {}; document.getElementById('spotifyDot').className = `dot ${spotify.authenticated ? '' : 'bad'}`; document.getElementById('spotifyName').textContent = spotify.authenticated ? firstName(spotify.user) : 'Connect'; document.getElementById('spotifyChip').title = spotify.authenticated ? `Spotify connected as ${spotify.user} (${spotify.targetDevice || ''})` : 'Connect Spotify'; document.getElementById('spotifyAvatar').innerHTML = spotify.image ? `<img src="${spotify.image}" alt="">` : initials(spotify.user);
           renderDisc(status);
         }
-        initTheme(); renderEvents(); loadDiscogsCollection(); loadSyncSettings(); tick(); setInterval(tick, 1000);
+        initTheme(); renderEvents(); loadDiscogsCollection(); loadSyncSettings(); loadCredentials(); tick(); setInterval(tick, 1000);
       </script>
     </body>
   </html>
