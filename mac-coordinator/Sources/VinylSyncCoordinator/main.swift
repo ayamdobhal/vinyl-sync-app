@@ -2096,7 +2096,9 @@ func pageHTML() -> String {
         let selectedReleaseId = null;
         let discSearchTerm = '';
         let lastStatus = null;
-        var lastShazamMatchedAt = '';
+        let lastBackendEvent = '';
+        let lastShazamIdentity = '';
+        let lastShazamError = '';
         let syncSettings = { spotifyOffsetSeconds: 0, spotifyStartDelaySeconds: 0, activityThreshold: 0.001, silenceThreshold: 0.00045, leadInSilenceSeconds: 0.45, transitionSilenceSeconds: 1.6, transitionWindowSeconds: 35 };
         const rmsHistory = [];
         const eventLog = [];
@@ -2358,12 +2360,14 @@ func pageHTML() -> String {
         }
         async function tick() {
           const response = await fetch('/status'); const status = await response.json(); lastStatus = status; const side = status.side || { name: '--', tracks: [] };
-          pushEvent(status.event); drawRmsGraph(Number(status.rms || 0), syncSettings);
+          if (status.event && status.event !== lastBackendEvent) { lastBackendEvent = status.event; pushEvent(status.event); }
+          drawRmsGraph(Number(status.rms || 0), syncSettings);
           document.getElementById('streamBadge').className = `badge ${status.audioConnected ? '' : 'bad'}`; document.getElementById('streamBadge').innerHTML = `<span class="dot ${status.audioConnected ? '' : 'bad'}"></span>${status.audioConnected ? 'Connected' : 'Waiting'}`;
           const shazam = status.shazam || {}; const shazamMatch = shazam.lastMatch || null;
           const shazamError = Boolean(shazam.error); document.getElementById('shazamBadge').className = `badge ${shazamError ? 'bad' : (shazamMatch ? 'run' : '')}`; document.getElementById('shazamBadge').textContent = shazamError ? 'Shazam error' : (shazamMatch ? `Shazam · ${shazamMatch.title}` : `Shazam ${shazam.state || 'waiting'}`);
-          if (shazamError) pushEvent(`Shazam error: ${shazam.error}`);
-          if (shazamMatch?.matchedAt && shazamMatch.matchedAt !== lastShazamMatchedAt) { lastShazamMatchedAt = shazamMatch.matchedAt; pushEvent(`Shazam matched ${shazamMatch.artist} — ${shazamMatch.title} at ${fmt(shazamMatch.predictedOffsetSeconds)}`); }
+          if (shazam.error !== lastShazamError) { lastShazamError = shazam.error || ''; if (shazam.error) pushEvent(`Shazam error: ${shazam.error}`); }
+          const shazamIdentity = shazamMatch?.shazamID || (shazamMatch ? `${shazamMatch.artist}|${shazamMatch.title}` : '');
+          if (shazamIdentity && shazamIdentity !== lastShazamIdentity) { lastShazamIdentity = shazamIdentity; pushEvent(`Shazam confirmed ${shazamMatch.artist} — ${shazamMatch.title} at ${fmt(shazamMatch.predictedOffsetSeconds)}`); }
           document.getElementById('deviceName').textContent = status.lastDeviceName || 'none'; document.getElementById('khz').textContent = status.sampleRate ? `${(Number(status.sampleRate) / 1000).toFixed(1)} kHz` : '-- kHz'; document.getElementById('rmsValue').textContent = Number(status.rms || 0).toFixed(5); document.getElementById('framesLabel').textContent = `frames ${status.frameCount || 0}`; document.getElementById('silenceAxis').textContent = `silence threshold ${Number(syncSettings.silenceThreshold || 0).toFixed(5)}`;
           document.getElementById('modeBadge').textContent = status.mode || 'idle'; document.getElementById('silence').textContent = `${Number(status.silenceSeconds || 0).toFixed(1)} s`; document.getElementById('active').textContent = status.audioActive ? 'yes' : 'no'; document.getElementById('active').className = status.audioActive ? 'good' : '';
           const showSelectedDisc = Boolean(activeAlbum);
