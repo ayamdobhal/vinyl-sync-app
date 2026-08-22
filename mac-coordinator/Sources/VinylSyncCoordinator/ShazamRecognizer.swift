@@ -140,6 +140,24 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
     }
   }
 
+  func rejectCurrentMatch() {
+    queue.async {
+      self.candidateIdentity = ""
+      self.candidateFirstSeen = .distantPast
+      self.confirmedIdentity = ""
+      self.updateStatus {
+        $0.lastMatch = nil
+        $0.latestObservation = nil
+        $0.candidateTitle = ""
+        $0.candidateArtist = ""
+        $0.candidateMatches = 0
+        $0.confirmedAt = nil
+        $0.state = self.audioFormat == nil ? "waiting" : "listening"
+        $0.error = ""
+      }
+    }
+  }
+
   func status() -> ShazamRecognitionStatus {
     lock.lock()
     var snapshot = statusValue

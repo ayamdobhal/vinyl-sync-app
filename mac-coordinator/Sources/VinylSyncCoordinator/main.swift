@@ -1304,6 +1304,24 @@ final class CoordinatorServer {
       return
     }
 
+    if request.method == "POST", request.path == "/sync/resync" {
+      guard let match = shazam.status().lastMatch else {
+        respondJSON(connection: connection, status: 409, body: ["error": "No confirmed Shazam match to resync."])
+        return
+      }
+      resetOffsetTracking()
+      handleShazamMatch(match, isNewTrack: true)
+      respondJSON(connection: connection, status: 200, body: ["ok": true])
+      return
+    }
+
+    if request.method == "POST", request.path == "/sync/wrong-match" {
+      shazam.rejectCurrentMatch()
+      resetOffsetTracking()
+      respondJSON(connection: connection, status: 200, body: ["ok": true])
+      return
+    }
+
     if request.method == "POST", request.path == "/spotify/play-current" {
       let snapshot = state.currentSnapshot()
       if snapshot.sidePlan.tracks.indices.contains(snapshot.currentTrackIndex),
@@ -2019,7 +2037,7 @@ func faviconSVG() -> String {
   """
 }
 
-func pageHTML() -> String {
+func legacyPageHTML() -> String {
   """
   <!doctype html>
   <html>
@@ -2581,6 +2599,126 @@ func pageHTML() -> String {
         initTheme(); renderEvents(); loadDiscogsCollection(); loadSyncSettings(); loadCredentials(); tick(); setInterval(tick, 1000);
       </script>
     </body>
+  </html>
+  """
+}
+
+func pageHTML() -> String {
+  """
+  <!doctype html>
+  <html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vinyl Sync</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <style>
+      :root { color-scheme: light; --bg:#f4f1ec; --panel:#fffefa; --ink:#171513; --muted:#716b65; --line:#ded8d0; --accent:#d5447d; --ok:#218552; --warn:#b56a20; --bad:#b93636; }
+      :root[data-theme="dark"] { color-scheme:dark; --bg:#11100f; --panel:#1a1817; --ink:#f3eee8; --muted:#a49d96; --line:#312e2b; --accent:#ed679b; --ok:#54c685; --warn:#e5a054; --bad:#ef7070; }
+      * { box-sizing:border-box; }
+      body { margin:0; min-height:100vh; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui,-apple-system,sans-serif; }
+      button,input,select { font:inherit; color:inherit; }
+      button { cursor:pointer; }
+      header { height:64px; padding:0 24px; display:flex; align-items:center; border-bottom:1px solid var(--line); background:color-mix(in srgb,var(--panel) 92%,transparent); position:sticky; top:0; z-index:5; backdrop-filter:blur(14px); }
+      .brand { font-size:17px; font-weight:700; letter-spacing:-.02em; }
+      .brand i { color:var(--accent); font-style:normal; }
+      .header-actions { margin-left:auto; display:flex; gap:8px; }
+      .icon-button,.button { border:1px solid var(--line); background:var(--panel); border-radius:9px; padding:9px 13px; }
+      .button.primary { background:var(--ink); color:var(--panel); border-color:var(--ink); }
+      .button.danger { color:var(--bad); }
+      main { max-width:980px; margin:0 auto; padding:34px 24px 72px; }
+      .health { display:flex; flex-wrap:wrap; gap:9px; margin-bottom:22px; }
+      .pill { display:inline-flex; gap:7px; align-items:center; border:1px solid var(--line); background:var(--panel); border-radius:999px; padding:7px 11px; font-size:12px; color:var(--muted); }
+      .dot { width:7px; height:7px; border-radius:50%; background:var(--warn); }
+      .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+      .hero { display:grid; grid-template-columns:minmax(240px,360px) 1fr; gap:42px; align-items:center; }
+      .art { width:100%; aspect-ratio:1; border-radius:16px; overflow:hidden; background:radial-gradient(circle at center,var(--accent) 0 7%,#29252d 7.3% 17%,#151318 17.3% 100%); box-shadow:0 18px 50px rgba(0,0,0,.16); }
+      .art img { width:100%; height:100%; object-fit:cover; display:block; }
+      .eyebrow { color:var(--accent); font-size:12px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
+      h1 { margin:10px 0 5px; font-size:clamp(32px,5vw,56px); line-height:1.02; letter-spacing:-.045em; }
+      .artist { font-size:20px; color:var(--muted); }
+      .album { margin-top:5px; color:var(--muted); }
+      .progress { margin:28px 0 8px; height:5px; border-radius:9px; background:var(--line); overflow:hidden; }
+      .progress span { display:block; height:100%; width:0; background:var(--accent); transition:width .5s linear; }
+      .times { display:flex; justify-content:space-between; color:var(--muted); font:12px ui-monospace,SFMono-Regular,monospace; }
+      .actions { display:flex; gap:9px; margin-top:25px; flex-wrap:wrap; }
+      .pressing { margin-top:34px; border-top:1px solid var(--line); padding-top:22px; }
+      .pressing-title { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:7px; }
+      .pressing-main { font-weight:650; }
+      .pressing-meta { color:var(--muted); font-size:13px; margin-top:3px; }
+      details { margin-top:28px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+      summary { cursor:pointer; padding:15px 17px; font-weight:650; }
+      .diagnostics { border-top:1px solid var(--line); padding:15px 17px; display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+      .metric label { display:block; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+      .metric span { display:block; margin-top:4px; font:13px ui-monospace,SFMono-Regular,monospace; overflow-wrap:anywhere; }
+      dialog { width:min(620px,calc(100vw - 32px)); border:1px solid var(--line); border-radius:14px; background:var(--panel); color:var(--ink); padding:0; box-shadow:0 24px 80px rgba(0,0,0,.3); }
+      dialog::backdrop { background:rgba(0,0,0,.45); backdrop-filter:blur(3px); }
+      .dialog-head { display:flex; align-items:center; padding:18px 20px; border-bottom:1px solid var(--line); }
+      .dialog-head h2 { margin:0; font-size:18px; }
+      .dialog-head button { margin-left:auto; }
+      .form { padding:20px; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+      .field { display:flex; flex-direction:column; gap:6px; }
+      .field.wide { grid-column:1/-1; }
+      .field label { font-size:12px; color:var(--muted); }
+      .field input,.field select { width:100%; padding:10px 11px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+      .dialog-actions { grid-column:1/-1; display:flex; justify-content:flex-end; gap:9px; padding-top:5px; }
+      .empty h1 { color:var(--muted); }
+      .toast { position:fixed; left:50%; bottom:24px; transform:translate(-50%,20px); opacity:0; transition:.2s; background:var(--ink); color:var(--panel); border-radius:8px; padding:9px 13px; z-index:10; pointer-events:none; }
+      .toast.show { opacity:1; transform:translate(-50%,0); }
+      @media(max-width:720px) { header{padding:0 16px} main{padding:24px 16px 56px}.hero{grid-template-columns:1fr;gap:26px}.art{max-width:360px;margin:auto}.diagnostics{grid-template-columns:1fr 1fr}.form{grid-template-columns:1fr}.field.wide{grid-column:auto}.dialog-actions{grid-column:auto} }
+    </style>
+  </head>
+  <body>
+    <header><div class="brand">vinyl<i>sync</i></div><div class="header-actions"><button class="icon-button" onclick="toggleTheme()" aria-label="Toggle theme">◐</button><button class="icon-button" onclick="openSettings()">Settings</button></div></header>
+    <main>
+      <div class="health">
+        <div class="pill"><span class="dot" id="audioDot"></span><span id="audioHealth">Audio waiting</span></div>
+        <div class="pill"><span class="dot" id="shazamDot"></span><span id="shazamHealth">Shazam waiting</span></div>
+        <div class="pill"><span class="dot" id="spotifyDot"></span><span id="spotifyHealth">Spotify waiting</span></div>
+      </div>
+      <section class="hero empty" id="hero">
+        <div class="art" id="art"></div>
+        <div>
+          <div class="eyebrow" id="stateLabel">Waiting for a record</div>
+          <h1 id="title">Drop the needle</h1>
+          <div class="artist" id="artist">Recognition starts automatically when sound arrives.</div>
+          <div class="album" id="album"></div>
+          <div class="progress"><span id="progressFill"></span></div>
+          <div class="times"><span id="elapsed">0:00</span><span id="duration">--:--</span></div>
+          <div class="actions"><button class="button primary" onclick="action('/sync/resync','Resync requested')">Resync</button><button class="button danger" onclick="action('/sync/wrong-match','Match rejected')">Wrong match</button></div>
+          <div class="pressing"><div class="pressing-title">Physical pressing</div><div class="pressing-main" id="pressingMain">Waiting for an album</div><div class="pressing-meta" id="pressingMeta">Discogs is optional and never blocks playback.</div></div>
+        </div>
+      </section>
+      <details><summary>Diagnostics</summary><div class="diagnostics">
+        <div class="metric"><label>Input</label><span id="diagInput">—</span></div><div class="metric"><label>Signal RMS</label><span id="diagRms">0</span></div><div class="metric"><label>Sample rate</label><span id="diagRate">—</span></div>
+        <div class="metric"><label>Shazam state</label><span id="diagState">waiting</span></div><div class="metric"><label>Submitted / skipped</label><span id="diagFrames">0 / 0</span></div><div class="metric"><label>Matches / errors</label><span id="diagMatches">0 / 0</span></div>
+        <div class="metric"><label>Offset</label><span id="diagOffset">—</span></div><div class="metric"><label>Spotify action</label><span id="diagSpotify">—</span></div><div class="metric"><label>Last error</label><span id="diagError">—</span></div>
+      </div></details>
+    </main>
+    <dialog id="settings"><div class="dialog-head"><h2>Connections</h2><button class="icon-button" onclick="settings.close()">Close</button></div><div class="form">
+      <div class="field"><label>Spotify client ID</label><input id="spotifyClientId"></div><div class="field"><label>Spotify client secret</label><input id="spotifySecret" type="password"></div>
+      <div class="field wide"><label>Spotify redirect URI</label><input id="redirectUri"></div><div class="field wide"><label>Spotify playback device</label><select id="spotifyDevice"></select></div>
+      <div class="field"><label>Discogs username</label><input id="discogsUsername"></div><div class="field"><label>Discogs token</label><input id="discogsToken" type="password"></div>
+      <div class="dialog-actions"><button class="button" onclick="location.href='/spotify/login'">Connect Spotify</button><button class="button primary" onclick="saveSettings()">Save</button></div>
+    </div></dialog>
+    <div class="toast" id="toast"></div>
+    <script>
+      const $ = id => document.getElementById(id);
+      const fmt = value => { const seconds=Math.max(0,Number(value||0)); return `${Math.floor(seconds/60)}:${String(Math.floor(seconds%60)).padStart(2,'0')}`; };
+      const safe = value => String(value ?? '').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+      function toast(message){ $('toast').textContent=message; $('toast').classList.add('show'); setTimeout(()=>$('toast').classList.remove('show'),2200); }
+      function dot(id,state){ $(id).className=`dot ${state}`; }
+      function toggleTheme(){ const root=document.documentElement; const dark=root.dataset.theme==='dark'; root.dataset.theme=dark?'light':'dark'; localStorage.setItem('vinyl-theme',root.dataset.theme); }
+      document.documentElement.dataset.theme=localStorage.getItem('vinyl-theme') || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+      async function action(path,message){ const response=await fetch(path,{method:'POST'}); const data=await response.json().catch(()=>({})); if(!response.ok){toast(data.error||'Action failed');return;} toast(message); await tick(); }
+      function renderPressing(pressing){ const match=pressing?.match; if(pressing?.state==='matched'&&match){ $('pressingMain').textContent=match.title||'Owned pressing'; const label=(match.labels||[])[0]||{}; const formats=(match.formats||[]).map(f=>[f.name,f.text,...(f.descriptions||[])].filter(Boolean).join(' ')).filter(Boolean).join(', '); $('pressingMeta').textContent=[match.year,match.country,label.name,label.catalogNumber,formats].filter(Boolean).join(' · ')||'Matched in your Discogs collection'; return; } if(pressing?.state==='ambiguous'){ $('pressingMain').textContent=`${match?.candidateCount||'Multiple'} owned pressings match`; $('pressingMeta').textContent='A small pressing chooser will be used only when needed.'; return; } const copy={searching:'Checking your Discogs collection…','not found':'Album recognized; owned pressing not found','not configured':'Connect Discogs to show pressing details',unavailable:'Discogs is temporarily unavailable',waiting:'Waiting for an album'}; $('pressingMain').textContent=copy[pressing?.state]||'Waiting for an album'; $('pressingMeta').textContent=pressing?.error||'Discogs is optional and never blocks playback.'; }
+      function render(status){ const shazam=status.shazam||{}, spotify=status.spotify||{}, now=status.nowPlaying||null, match=shazam.lastMatch||null, track=now||match; dot('audioDot',status.audioConnected?'ok':'bad'); $('audioHealth').textContent=status.audioConnected?`Audio · ${status.lastDeviceName||'connected'}`:'Audio disconnected'; const shazamOK=shazam.state==='confirmed'; dot('shazamDot',shazam.error?'bad':shazamOK?'ok':''); $('shazamHealth').textContent=shazamOK?`Shazam · ${match?.title||'confirmed'}`:`Shazam · ${shazam.state||'waiting'}`; dot('spotifyDot',spotify.authenticated?'ok':'bad'); $('spotifyHealth').textContent=spotify.authenticated?`Spotify · ${spotify.targetDevice||spotify.user||'connected'}`:'Spotify not connected'; if(track){ $('hero').classList.remove('empty'); $('stateLabel').textContent=now?'Now following':'Match confirmed'; $('title').textContent=track.title||'Unknown track'; $('artist').textContent=track.artist||''; $('album').textContent=now?.albumName||''; const art=now?.albumImage||match?.artworkURL||''; $('art').innerHTML=art?`<img src="${safe(art)}" alt="">`:''; const offset=Number(status.offsetTracking?.estimatedOffsetSeconds ?? match?.predictedOffsetSeconds ?? 0); const duration=Number(now?.durationSeconds||0); $('elapsed').textContent=fmt(offset); $('duration').textContent=duration?fmt(duration):'--:--'; $('progressFill').style.width=duration?`${Math.min(100,offset/duration*100)}%`:'0'; } else { $('hero').classList.add('empty'); $('stateLabel').textContent=status.audioConnected?(shazam.state||'Listening'):'Waiting for audio'; $('title').textContent='Drop the needle'; $('artist').textContent='Recognition starts automatically when sound arrives.'; $('album').textContent=''; $('art').innerHTML=''; $('elapsed').textContent='0:00'; $('duration').textContent='--:--'; $('progressFill').style.width='0'; } renderPressing(status.pressing); $('diagInput').textContent=status.lastDeviceName||'—'; $('diagRms').textContent=Number(status.rms||0).toFixed(5); $('diagRate').textContent=status.sampleRate?`${(status.sampleRate/1000).toFixed(1)} kHz`:'—'; $('diagState').textContent=shazam.state||'waiting'; $('diagFrames').textContent=`${shazam.submittedFrames||0} / ${shazam.silentFramesSkipped||0}`; $('diagMatches').textContent=`${shazam.matches||0} / ${shazam.transientErrors||0}`; $('diagOffset').textContent=status.offsetTracking?.trackIdentity?`${Number(status.offsetTracking.estimatedOffsetSeconds||0).toFixed(2)} s · drift ${Number(status.offsetTracking.driftSeconds||0).toFixed(2)} s`:'—'; $('diagSpotify').textContent=spotify.lastAction||'—'; $('diagError').textContent=shazam.error||shazam.lastError||spotify.error||status.pressing?.error||'—'; }
+      async function tick(){ try{ const response=await fetch('/status'); render(await response.json()); }catch{ dot('audioDot','bad'); $('audioHealth').textContent='Coordinator unavailable'; } }
+      async function openSettings(){ $('settings').showModal(); const config=await (await fetch('/api/config')).json(); $('spotifyClientId').value=config.spotifyClientId||''; $('redirectUri').value=config.spotifyRedirectUri||''; $('discogsUsername').value=config.discogsUsername||''; $('spotifySecret').placeholder=config.spotifyClientSecretSet?'saved':'not set'; $('discogsToken').placeholder=config.discogsTokenSet?'saved':'not set'; const select=$('spotifyDevice'); select.innerHTML=''; if(config.spotifyTargetDeviceId){ const option=new Option(`${config.spotifyTargetDeviceName||'Saved device'} (saved)`,config.spotifyTargetDeviceId,true,true); option.dataset.name=config.spotifyTargetDeviceName||''; select.add(option); } const response=await fetch('/spotify/devices'); if(response.ok){ for(const device of (await response.json()).devices||[]){ let option=[...select.options].find(o=>o.value===device.id); if(!option){ option=new Option(); select.add(option); } option.value=device.id; option.dataset.name=device.name||''; option.textContent=`${device.name||'Unknown'}${device.isActive?' · active':''}`; option.selected=device.id===config.spotifyTargetDeviceId; } } if(!select.options.length)select.add(new Option('No devices available','')); }
+      async function saveSettings(){ const select=$('spotifyDevice'), chosen=select.options[select.selectedIndex]; const body={spotifyClientId:$('spotifyClientId').value.trim(),spotifyRedirectUri:$('redirectUri').value.trim(),spotifyTargetDeviceId:select.value,spotifyTargetDeviceName:chosen?.dataset.name||'',discogsUsername:$('discogsUsername').value.trim()}; if($('spotifySecret').value)body.spotifyClientSecret=$('spotifySecret').value; if($('discogsToken').value)body.discogsToken=$('discogsToken').value; const response=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(!response.ok){toast('Could not save settings');return;} $('spotifySecret').value=''; $('discogsToken').value=''; $('settings').close(); toast('Connections saved'); await tick(); }
+      tick(); setInterval(tick,1000);
+    </script>
+  </body>
   </html>
   """
 }
