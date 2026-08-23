@@ -10,4 +10,4 @@ publish/
 *.suo
 *.log
 xcuserdata/
-*.xcodeproj/project.xcworkspace/
+**/*.xcodeproj/project.xcworkspace/
