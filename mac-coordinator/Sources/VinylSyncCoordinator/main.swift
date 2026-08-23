@@ -498,7 +498,7 @@ final class DiscogsClient {
     return releases
   }
 
-  func matchOwnedRelease(album: String, artist: String) throws -> [String: Any]? {
+  func matchOwnedRelease(album: String, artist: String, preferredReleaseID: Int? = nil) throws -> [String: Any]? {
     guard !album.isEmpty else { return nil }
     let releases = try collection()
     let wantedAlbum = normalized(album)
@@ -510,12 +510,20 @@ final class DiscogsClient {
         || releaseArtist.contains(wantedArtist) || wantedArtist.contains(releaseArtist)
     }
     let candidates = exact.isEmpty ? titleMatches : exact
+    if let preferredReleaseID,
+       var preferred = candidates.first(where: { $0["id"] as? Int == preferredReleaseID }) {
+      preferred["ambiguous"] = false
+      preferred["candidateCount"] = candidates.count
+      preferred["confidence"] = "remembered"
+      return preferred
+    }
     guard candidates.count == 1, var result = candidates.first else {
       return candidates.isEmpty ? nil : [
         "ambiguous": true,
         "candidateCount": candidates.count,
         "album": album,
-        "artist": artist
+        "artist": artist,
+        "candidates": candidates
       ]
     }
     result["ambiguous"] = false
@@ -1033,6 +1041,7 @@ final class CoordinatorServer {
   private let state = StateStore()
   private let spotify = SpotifyClient()
   private let discogs = DiscogsClient()
+  private let pressingChoices = PressingChoiceStore()
   private lazy var shazam = ShazamRecognizer { [weak self] match, isNewTrack in
     self?.handleShazamMatch(match, isNewTrack: isNewTrack)
   }
@@ -1183,6 +1192,21 @@ final class CoordinatorServer {
       shazam.rejectCurrentMatch()
       resetOffsetTracking()
       respondJSON(connection: connection, status: 200, body: ["ok": true])
+      return
+    }
+
+    if request.method == "POST", request.path == "/discogs/select-pressing" {
+      do {
+        guard let json = try JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+              let releaseID = json["releaseId"] as? Int else {
+          respondJSON(connection: connection, status: 400, body: ["error": "Missing Discogs release ID."])
+          return
+        }
+        try selectPressing(releaseID: releaseID)
+        respondJSON(connection: connection, status: 200, body: ["ok": true])
+      } catch {
+        respondJSON(connection: connection, status: 400, body: ["error": error.localizedDescription])
+      }
       return
     }
 
@@ -1393,7 +1417,12 @@ final class CoordinatorServer {
   private func resolvePressing(for track: SpotifyTrackResolution) {
     guard discogs.status().configured else { return }
     do {
-      let match = try discogs.matchOwnedRelease(album: track.albumName, artist: track.albumArtists)
+      let preferredReleaseID = pressingChoices.releaseID(album: track.albumName, artist: track.albumArtists)
+      let match = try discogs.matchOwnedRelease(
+        album: track.albumName,
+        artist: track.albumArtists,
+        preferredReleaseID: preferredReleaseID
+      )
       metadataLock.lock()
       pressingMatch = match
       if match?["ambiguous"] as? Bool == true {
@@ -1410,6 +1439,32 @@ final class CoordinatorServer {
       pressingError = error.localizedDescription
       metadataLock.unlock()
     }
+  }
+
+  private func selectPressing(releaseID: Int) throws {
+    metadataLock.lock()
+    let album = resolvedTrackPayload?["albumName"] as? String ?? ""
+    let artist = resolvedTrackPayload?["albumArtists"] as? String ?? ""
+    metadataLock.unlock()
+    guard !album.isEmpty else {
+      throw NSError(domain: "Discogs", code: 2, userInfo: [NSLocalizedDescriptionKey: "No recognized album is awaiting a pressing choice."])
+    }
+
+    guard let match = try discogs.matchOwnedRelease(
+      album: album,
+      artist: artist,
+      preferredReleaseID: releaseID
+    ), match["ambiguous"] as? Bool == false,
+       match["id"] as? Int == releaseID else {
+      throw NSError(domain: "Discogs", code: 3, userInfo: [NSLocalizedDescriptionKey: "That release is not a candidate for the recognized album."])
+    }
+
+    pressingChoices.remember(releaseID: releaseID, album: album, artist: artist)
+    metadataLock.lock()
+    pressingState = "matched"
+    pressingMatch = match
+    pressingError = ""
+    metadataLock.unlock()
   }
 
   private func schedulePlayback(_ request: PlaybackRequest) {
@@ -2495,6 +2550,12 @@ func pageHTML() -> String {
       .pressing-title { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.08em; margin-bottom:7px; }
       .pressing-main { font-weight:650; }
       .pressing-meta { color:var(--muted); font-size:13px; margin-top:3px; }
+      .pressing-options { display:flex; flex-direction:column; gap:7px; margin-top:12px; }
+      .pressing-option { display:flex; align-items:center; gap:10px; text-align:left; border:1px solid var(--line); background:var(--panel); border-radius:9px; padding:8px; }
+      .pressing-option:hover { border-color:var(--accent); }
+      .pressing-option img { width:42px; height:42px; border-radius:5px; object-fit:cover; background:var(--bg); }
+      .pressing-option span { display:block; }
+      .pressing-option small { display:block; color:var(--muted); margin-top:2px; }
       details { margin-top:28px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
       summary { cursor:pointer; padding:15px 17px; font-weight:650; }
       .diagnostics { border-top:1px solid var(--line); padding:15px 17px; display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
@@ -2535,7 +2596,7 @@ func pageHTML() -> String {
           <div class="progress"><span id="progressFill"></span></div>
           <div class="times"><span id="elapsed">0:00</span><span id="duration">--:--</span></div>
           <div class="actions"><button class="button primary" onclick="action('/sync/resync','Resync requested')">Resync</button><button class="button danger" onclick="action('/sync/wrong-match','Match rejected')">Wrong match</button></div>
-          <div class="pressing"><div class="pressing-title">Physical pressing</div><div class="pressing-main" id="pressingMain">Waiting for an album</div><div class="pressing-meta" id="pressingMeta">Discogs is optional and never blocks playback.</div></div>
+          <div class="pressing"><div class="pressing-title">Physical pressing</div><div class="pressing-main" id="pressingMain">Waiting for an album</div><div class="pressing-meta" id="pressingMeta">Discogs is optional and never blocks playback.</div><div class="pressing-options" id="pressingOptions"></div></div>
         </div>
       </section>
       <details><summary>Diagnostics</summary><div class="diagnostics">
@@ -2560,7 +2621,8 @@ func pageHTML() -> String {
       function toggleTheme(){ const root=document.documentElement; const dark=root.dataset.theme==='dark'; root.dataset.theme=dark?'light':'dark'; localStorage.setItem('vinyl-theme',root.dataset.theme); }
       document.documentElement.dataset.theme=localStorage.getItem('vinyl-theme') || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
       async function action(path,message){ const response=await fetch(path,{method:'POST'}); const data=await response.json().catch(()=>({})); if(!response.ok){toast(data.error||'Action failed');return;} toast(message); await tick(); }
-      function renderPressing(pressing){ const match=pressing?.match; if(pressing?.state==='matched'&&match){ $('pressingMain').textContent=match.title||'Owned pressing'; const label=(match.labels||[])[0]||{}; const formats=(match.formats||[]).map(f=>[f.name,f.text,...(f.descriptions||[])].filter(Boolean).join(' ')).filter(Boolean).join(', '); $('pressingMeta').textContent=[match.year,match.country,label.name,label.catalogNumber,formats].filter(Boolean).join(' · ')||'Matched in your Discogs collection'; return; } if(pressing?.state==='ambiguous'){ $('pressingMain').textContent=`${match?.candidateCount||'Multiple'} owned pressings match`; $('pressingMeta').textContent='A small pressing chooser will be used only when needed.'; return; } const copy={searching:'Checking your Discogs collection…','not found':'Album recognized; owned pressing not found','not configured':'Connect Discogs to show pressing details',unavailable:'Discogs is temporarily unavailable',waiting:'Waiting for an album'}; $('pressingMain').textContent=copy[pressing?.state]||'Waiting for an album'; $('pressingMeta').textContent=pressing?.error||'Discogs is optional and never blocks playback.'; }
+      function renderPressing(pressing){ const match=pressing?.match, options=$('pressingOptions'); options.innerHTML=''; if(pressing?.state==='matched'&&match){ $('pressingMain').textContent=match.title||'Owned pressing'; const label=(match.labels||[])[0]||{}; const formats=(match.formats||[]).map(f=>[f.name,f.text,...(f.descriptions||[])].filter(Boolean).join(' ')).filter(Boolean).join(', '); $('pressingMeta').textContent=[match.year,match.country,label.name,label.catalogNumber,formats].filter(Boolean).join(' · ')||'Matched in your Discogs collection'; return; } if(pressing?.state==='ambiguous'){ const candidates=match?.candidates||[]; $('pressingMain').textContent=`Choose one of ${candidates.length||match?.candidateCount||'the'} owned pressings`; $('pressingMeta').textContent='Your choice is remembered for this artist and album.'; for(const candidate of candidates){ const label=(candidate.labels||[])[0]||{}, format=(candidate.formats||[])[0]||{}; const button=document.createElement('button'); button.className='pressing-option'; button.onclick=()=>selectPressing(candidate.id); button.innerHTML=`${candidate.thumb?`<img src="${safe(candidate.thumb)}" alt="">`:''}<span><strong>${safe(candidate.title||'Owned pressing')}</strong><small>${safe([candidate.year,candidate.country,label.name,label.catalogNumber,format.text,...(format.descriptions||[])].filter(Boolean).join(' · '))}</small></span>`; options.append(button); } return; } const copy={searching:'Checking your Discogs collection…','not found':'Album recognized; owned pressing not found','not configured':'Connect Discogs to show pressing details',unavailable:'Discogs is temporarily unavailable',waiting:'Waiting for an album'}; $('pressingMain').textContent=copy[pressing?.state]||'Waiting for an album'; $('pressingMeta').textContent=pressing?.error||'Discogs is optional and never blocks playback.'; }
+      async function selectPressing(releaseId){ const response=await fetch('/discogs/select-pressing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({releaseId})}); const data=await response.json().catch(()=>({})); if(!response.ok){toast(data.error||'Could not save pressing');return;} toast('Pressing remembered'); await tick(); }
       function render(status){ const shazam=status.shazam||{}, spotify=status.spotify||{}, now=status.nowPlaying||null, match=shazam.lastMatch||null, track=now||match; dot('audioDot',status.audioConnected?'ok':'bad'); $('audioHealth').textContent=status.audioConnected?`Audio · ${status.lastDeviceName||'connected'}`:'Audio disconnected'; const shazamOK=shazam.state==='confirmed'; dot('shazamDot',shazam.error?'bad':shazamOK?'ok':''); $('shazamHealth').textContent=shazamOK?`Shazam · ${match?.title||'confirmed'}`:`Shazam · ${shazam.state||'waiting'}`; const spotifyReady=spotify.authenticated&&spotify.targetDevice&&spotify.targetDevice!=='Not selected'; dot('spotifyDot',spotifyReady?'ok':spotify.authenticated?'':'bad'); $('spotifyHealth').textContent=spotifyReady?`Spotify · ${spotify.targetDevice}`:spotify.authenticated?'Spotify · choose a device':'Spotify not connected'; if(track){ $('hero').classList.remove('empty'); $('stateLabel').textContent=now?'Now following':'Match confirmed'; $('title').textContent=track.title||'Unknown track'; $('artist').textContent=track.artist||''; $('album').textContent=now?.albumName||''; const art=now?.albumImage||match?.artworkURL||''; $('art').innerHTML=art?`<img src="${safe(art)}" alt="">`:''; const offset=Number(status.offsetTracking?.estimatedOffsetSeconds ?? match?.predictedOffsetSeconds ?? 0); const duration=Number(now?.durationSeconds||0); $('elapsed').textContent=fmt(offset); $('duration').textContent=duration?fmt(duration):'--:--'; $('progressFill').style.width=duration?`${Math.min(100,offset/duration*100)}%`:'0'; } else { $('hero').classList.add('empty'); $('stateLabel').textContent=status.audioConnected?(shazam.state||'Listening'):'Waiting for audio'; $('title').textContent='Drop the needle'; $('artist').textContent='Recognition starts automatically when sound arrives.'; $('album').textContent=''; $('art').innerHTML=''; $('elapsed').textContent='0:00'; $('duration').textContent='--:--'; $('progressFill').style.width='0'; } renderPressing(status.pressing); $('diagInput').textContent=status.lastDeviceName||'—'; $('diagRms').textContent=Number(status.rms||0).toFixed(5); $('diagRate').textContent=status.sampleRate?`${(status.sampleRate/1000).toFixed(1)} kHz`:'—'; $('diagState').textContent=shazam.state||'waiting'; $('diagFrames').textContent=`${shazam.submittedFrames||0} / ${shazam.silentFramesSkipped||0}`; $('diagMatches').textContent=`${shazam.matches||0} / ${shazam.transientErrors||0}`; $('diagOffset').textContent=status.offsetTracking?.trackIdentity?`${Number(status.offsetTracking.estimatedOffsetSeconds||0).toFixed(2)} s · drift ${Number(status.offsetTracking.driftSeconds||0).toFixed(2)} s`:'—'; $('diagSpotify').textContent=spotify.lastAction||'—'; $('diagError').textContent=shazam.error||shazam.lastError||spotify.error||status.pressing?.error||'—'; }
       async function tick(){ try{ const response=await fetch('/status'); render(await response.json()); }catch{ dot('audioDot','bad'); $('audioHealth').textContent='Coordinator unavailable'; } }
       async function openSettings(){ $('settings').showModal(); const config=await (await fetch('/api/config')).json(); $('spotifyClientId').value=config.spotifyClientId||''; $('redirectUri').value=config.spotifyRedirectUri||''; $('discogsUsername').value=config.discogsUsername||''; $('spotifySecret').placeholder=config.spotifyClientSecretSet?'saved':'not set'; $('discogsToken').placeholder=config.discogsTokenSet?'saved':'not set'; const select=$('spotifyDevice'); select.innerHTML=''; if(config.spotifyTargetDeviceId){ const option=new Option(`${config.spotifyTargetDeviceName||'Saved device'} (saved)`,config.spotifyTargetDeviceId,true,true); option.dataset.name=config.spotifyTargetDeviceName||''; select.add(option); } const response=await fetch('/spotify/devices'); if(response.ok){ for(const device of (await response.json()).devices||[]){ let option=[...select.options].find(o=>o.value===device.id); if(!option){ option=new Option(); select.add(option); } option.value=device.id; option.dataset.name=device.name||''; option.textContent=`${device.name||'Unknown'}${device.isActive?' · active':''}`; option.selected=device.id===config.spotifyTargetDeviceId; } } if(!select.options.length)select.add(new Option('No devices available','')); }
