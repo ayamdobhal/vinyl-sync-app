@@ -14,17 +14,6 @@ struct SidePlan: Codable {
   var tracks: [SideTrack]
 
   static let empty = SidePlan(name: "Untitled side", tracks: [])
-  static let aThousandSunsSideA = SidePlan(
-    name: "A Thousand Suns - Side A",
-    tracks: [
-      SideTrack(position: "A1", title: "The Requiem", durationSeconds: 121, uri: nil),
-      SideTrack(position: "A2", title: "The Radiance", durationSeconds: 57, uri: nil),
-      SideTrack(position: "A3", title: "Burning in the Skies", durationSeconds: 253, uri: nil),
-      SideTrack(position: "A4", title: "Empty Spaces", durationSeconds: 18, uri: nil),
-      SideTrack(position: "A5", title: "When They Come for Me", durationSeconds: 293, uri: nil),
-      SideTrack(position: "A6", title: "Robot Boy", durationSeconds: 269, uri: nil)
-    ]
-  )
 }
 
 struct PlaybackRequest {
@@ -705,7 +694,7 @@ struct SyncSnapshot {
   var rms: Float = 0
   var lastSeen = Date.distantPast
 
-  var sidePlan = SidePlan.aThousandSunsSideA
+  var sidePlan = SidePlan.empty
   var mode = "idle"
   var audioActive = false
   var silenceSeconds: Double = 0
@@ -1029,7 +1018,7 @@ final class StateStore {
     guard let data = (try? Data(contentsOf: url)) ?? (try? Data(contentsOf: legacy)),
           let plan = try? JSONDecoder().decode(SidePlan.self, from: data),
           !plan.tracks.isEmpty else {
-      return .aThousandSunsSideA
+      return .empty
     }
     return plan
   }

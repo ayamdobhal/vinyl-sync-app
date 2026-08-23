@@ -33,8 +33,8 @@ cp Resources/Info.plist "$app_dir/Contents/Info.plist"
 /usr/libexec/PlistBuddy \
   -c "Set :CFBundleExecutable vinyl-sync-coordinator" \
   -c "Set :CFBundleIdentifier dev.iamdobhal.vinyl-sync" \
-  -c "Set :CFBundleShortVersionString 0.2.0" \
-  -c "Set :CFBundleVersion 2" \
+  -c "Set :CFBundleShortVersionString 0.3.0" \
+  -c "Set :CFBundleVersion 5" \
   "$app_dir/Contents/Info.plist"
 cp .build/release/vinyl-sync-coordinator "$app_dir/Contents/MacOS/vinyl-sync-coordinator"
 cp Sources/VinylSyncCoordinator/AppIcon.icns "$app_dir/Contents/Resources/AppIcon.icns"

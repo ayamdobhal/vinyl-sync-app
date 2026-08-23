@@ -1,10 +1,12 @@
-# Audio Stream Protocol
+# Audio stream protocol
 
-The Windows agent connects to:
+The Windows agent connects to the coordinator endpoint configured in its tray settings:
 
 ```text
-ws://192.168.1.3:4739/audio
+ws://<coordinator-host>:<port>/audio
 ```
+
+The default port is `4739`; the host has no baked-in default.
 
 The first WebSocket message is UTF-8 JSON:
 
@@ -15,14 +17,14 @@ The first WebSocket message is UTF-8 JSON:
   "channels": 1,
   "format": "f32le",
   "frameMs": 100,
-  "deviceName": "MOTU M Series"
+  "deviceName": "Selected WASAPI input"
 }
 ```
 
-Subsequent binary messages are little-endian `float32` mono PCM frames.
+Subsequent binary messages contain little-endian, non-interleaved `float32` mono PCM. The agent normally sends one 100 ms buffer per message.
 
-The Mac coordinator treats frames as a continuous stream and maintains a monotonic stream clock for album/side sync. The side timer starts when RMS crosses the activity threshold while the coordinator is armed.
+The coordinator calculates RMS for every buffer. Buffers below the silence threshold remain visible in diagnostics but are not submitted to ShazamKit. Supported recognition sample rates are 16, 32, 44.1, and 48 kHz. A new hello or changed sample rate resets the recognition and local offset sessions.
 
-The same frames are passed to a ShazamKit streaming session using the sample rate from the hello message. ShazamKit supports the protocol's mono float32 PCM at 16, 32, 44.1, or 48 kHz. A new hello with a different sample rate resets the recognition session and stream clock.
+A new recording requires two agreeing Shazam matches before it can affect Spotify. The coordinator resolves the track by ISRC, falling back to normalized title and artist, then anchors Shazam's predicted position to a local monotonic clock. Later observations refine drift gradually; duplicate callbacks and implausible backward or forward jumps do not issue playback commands.
 
-On a public-catalog match, the coordinator uses the Shazam ISRC to find the Spotify recording, falling back to title and artist. Spotify playback starts at ShazamKit's predicted current match offset. Duplicate callbacks for the same recording are suppressed for 30 seconds.
+The WebSocket is intended for a trusted LAN. It currently has no transport encryption or client authentication; do not expose port `4739` directly to the public internet.

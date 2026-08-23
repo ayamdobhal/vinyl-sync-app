@@ -203,7 +203,7 @@ internal sealed class CoordinatorSettingsDialog : Form
         _host.Location = new Point(16, 38);
         _host.Size = new Size(358, 27);
         _host.Text = host;
-        _host.PlaceholderText = "vinyl-sync.local or 192.168.1.3";
+        _host.PlaceholderText = "vinyl-sync.local or the Mac LAN address";
 
         var portLabel = new Label { Text = "Port", AutoSize = true, Location = new Point(16, 76) };
         _port.Location = new Point(16, 98);
