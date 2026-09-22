@@ -34,7 +34,7 @@ cd mac-coordinator
 ./build.sh
 ```
 
-Public-catalog Shazam recognition requires a signed build whose explicit App ID has the ShazamKit App Service enabled. The Xcode project contains `Debug`, `Release` (App Store/TestFlight), and `Direct` configurations. Select the Apple Developer team and use the Bundle ID registered for ShazamKit; this repository currently uses `dev.iamdobhal.vinyl-sync`.
+Public-catalog Shazam recognition requires a signed build whose explicit App ID has the ShazamKit App Service enabled. The Xcode project contains `Debug`, `Release` (App Store/TestFlight), and `Direct` configurations. Select the Apple Developer team and use the Bundle ID registered for ShazamKit; this repository currently uses `dev.iamdobhal.vinylsync`.
 
 For a development-signed command-line build:
 
@@ -42,6 +42,17 @@ For a development-signed command-line build:
 ./sign.sh "Apple Development: Developer Name (TEAMID)" /path/to/profile.provisionprofile
 open ".build/debug/Vinyl Sync Coordinator.app"
 ```
+
+For the current owner-signed Mac build (version 0.3.0, build 6):
+
+```sh
+xcodebuild -project mac-coordinator/VinylSyncCoordinator.xcodeproj \
+  -scheme VinylSyncCoordinator -configuration Direct \
+  -derivedDataPath mac-coordinator/.build/owner-signed \
+  DEVELOPMENT_TEAM=4FFCQ5BLJT -allowProvisioningUpdates build
+```
+
+Register the explicit App ID `dev.iamdobhal.vinylsync` under Ayam's team (`4FFCQ5BLJT`) and enable **App Services → ShazamKit** in the Apple Developer portal. The previous Sumit-signed identifier is separate; signing successfully does not enable this service automatically. Direct is the non-sandboxed local testing configuration and retains the existing Application Support data location. A team change may require approving Keychain access or signing in to Spotify again.
 
 Do not add the iOS-only `com.apple.developer.shazamkit` entitlement manually. ShazamKit access on macOS is enabled on the App ID. The App Store target uses its sandbox/network entitlements; the Direct target is available for direct distribution and diagnostics.
 

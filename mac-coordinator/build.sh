@@ -16,9 +16,9 @@ mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp Resources/Info.plist "$app_dir/Contents/Info.plist"
 /usr/libexec/PlistBuddy \
   -c "Set :CFBundleExecutable vinyl-sync-coordinator" \
-  -c "Set :CFBundleIdentifier ${VINYL_SYNC_BUNDLE_ID:-dev.iamdobhal.vinyl-sync}" \
+  -c "Set :CFBundleIdentifier ${VINYL_SYNC_BUNDLE_ID:-dev.iamdobhal.vinylsync}" \
   -c "Set :CFBundleShortVersionString 0.3.0" \
-  -c "Set :CFBundleVersion 5" \
+  -c "Set :CFBundleVersion 6" \
   "$app_dir/Contents/Info.plist"
 cp .build/debug/vinyl-sync-coordinator "$app_dir/Contents/MacOS/vinyl-sync-coordinator"
 cp Sources/VinylSyncCoordinator/AppIcon.icns "$app_dir/Contents/Resources/AppIcon.icns"
