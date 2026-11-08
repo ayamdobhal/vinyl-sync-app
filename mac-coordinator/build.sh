@@ -11,15 +11,17 @@ swiftc \
   -o .build/debug/vinyl-sync-coordinator
 
 app_dir=".build/debug/Vinyl Sync Coordinator.app"
+rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp Resources/Info.plist "$app_dir/Contents/Info.plist"
 /usr/libexec/PlistBuddy \
   -c "Set :CFBundleExecutable vinyl-sync-coordinator" \
-  -c "Set :CFBundleIdentifier ${VINYL_SYNC_BUNDLE_ID:-dev.iamdobhal.vinyl-sync}" \
-  -c "Set :CFBundleShortVersionString 0.2.0" \
-  -c "Set :CFBundleVersion 2" \
+  -c "Set :CFBundleIdentifier ${VINYL_SYNC_BUNDLE_ID:-dev.iamdobhal.vinylsync}" \
+  -c "Set :CFBundleShortVersionString 0.3.0" \
+  -c "Set :CFBundleVersion 12" \
   "$app_dir/Contents/Info.plist"
 cp .build/debug/vinyl-sync-coordinator "$app_dir/Contents/MacOS/vinyl-sync-coordinator"
 cp Sources/VinylSyncCoordinator/AppIcon.icns "$app_dir/Contents/Resources/AppIcon.icns"
+codesign --force --deep --sign - "$app_dir"
 
 echo "$app_dir"

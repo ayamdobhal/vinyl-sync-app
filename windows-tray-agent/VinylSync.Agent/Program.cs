@@ -37,6 +37,15 @@ internal sealed class TrayApp : IDisposable
         var menu = new ContextMenuStrip();
         menu.Items.Add(_statusMenu);
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Coordinator...", null, async (_, _) =>
+        {
+            using var dialog = new CoordinatorSettingsDialog(_config.MacHost, _config.MacPort);
+            if (dialog.ShowDialog() != DialogResult.OK) return;
+            _config.MacHost = dialog.CoordinatorHost;
+            _config.MacPort = dialog.CoordinatorPort;
+            _configStore.Save(_config);
+            await RunTrayAction(RestartStreaming);
+        });
         menu.Items.Add("Reconnect", null, async (_, _) =>
         {
             await RunTrayAction(RestartStreaming);
@@ -109,6 +118,11 @@ internal sealed class TrayApp : IDisposable
     private async Task StartStreaming()
     {
         if (_streamer != null) return;
+        if (string.IsNullOrWhiteSpace(_config.MacHost))
+        {
+            SetStatus("Configure coordinator");
+            return;
+        }
 
         RefreshDevices();
         var device = _devices.FirstOrDefault(d => d.ID == _config.DeviceId) ?? _devices.FirstOrDefault();
@@ -165,6 +179,51 @@ internal sealed class TrayApp : IDisposable
         _streamer?.Dispose();
         _notifyIcon.Dispose();
         foreach (var device in _devices) device.Dispose();
+    }
+}
+
+internal sealed class CoordinatorSettingsDialog : Form
+{
+    private readonly TextBox _host = new();
+    private readonly NumericUpDown _port = new();
+
+    public string CoordinatorHost => _host.Text.Trim();
+    public int CoordinatorPort => decimal.ToInt32(_port.Value);
+
+    public CoordinatorSettingsDialog(string host, int port)
+    {
+        Text = "Vinyl Sync Coordinator";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterScreen;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ClientSize = new Size(390, 166);
+
+        var hostLabel = new Label { Text = "Mac hostname or IP", AutoSize = true, Location = new Point(16, 16) };
+        _host.Location = new Point(16, 38);
+        _host.Size = new Size(358, 27);
+        _host.Text = host;
+        _host.PlaceholderText = "vinyl-sync.local or the Mac LAN address";
+
+        var portLabel = new Label { Text = "Port", AutoSize = true, Location = new Point(16, 76) };
+        _port.Location = new Point(16, 98);
+        _port.Size = new Size(110, 27);
+        _port.Minimum = 1;
+        _port.Maximum = 65535;
+        _port.Value = Math.Clamp(port, 1, 65535);
+
+        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(218, 126), Size = new Size(75, 28) };
+        var save = new Button { Text = "Save", DialogResult = DialogResult.OK, Location = new Point(299, 126), Size = new Size(75, 28) };
+        save.Click += (_, args) =>
+        {
+            if (!string.IsNullOrWhiteSpace(CoordinatorHost)) return;
+            MessageBox.Show(this, "Enter the Mac hostname or IP address.", "Vinyl Sync", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            DialogResult = DialogResult.None;
+        };
+
+        AcceptButton = save;
+        CancelButton = cancel;
+        Controls.AddRange([hostLabel, _host, portLabel, _port, cancel, save]);
     }
 }
 
@@ -403,7 +462,7 @@ internal static class AudioConvert
 
 internal sealed class AppConfig
 {
-    public string MacHost { get; set; } = "192.168.1.3";
+    public string MacHost { get; set; } = "";
     public int MacPort { get; set; } = 4739;
     public string? DeviceId { get; set; }
     public string? DeviceName { get; set; }

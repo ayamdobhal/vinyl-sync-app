@@ -14,31 +14,61 @@ struct ShazamMatchResult {
   var predictedOffsetSeconds: Double
   var frequencySkew: Float
   var matchedAt: Date
+  var matchedUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+  var queryDurationSeconds: Double = 0
+
+  var identity: String {
+    if !shazamID.isEmpty { return shazamID }
+    return "\(artist)|\(title)"
+      .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+      .lowercased()
+  }
 }
 
 struct ShazamRecognitionStatus {
   var available = true
   var enabled = true
-  var state = "waiting for audio"
+  var state = "waiting"
   var sampleRate = 0
   var submittedFrames: UInt64 = 0
+  var silentFramesSkipped: UInt64 = 0
+  var silentBuffersSkipped: UInt64 = 0
   var matches: UInt64 = 0
+  var noMatches: UInt64 = 0
+  var transientErrors: UInt64 = 0
   var lastMatch: ShazamMatchResult?
+  var latestObservation: ShazamMatchResult?
+  var candidateTitle = ""
+  var candidateArtist = ""
+  var candidateMatches = 0
+  var confirmedAt: Date?
+  var lastSuccessfulMatchAt: Date?
+  var lastError = ""
+  var lastErrorAt: Date?
+  var lastQueueDelaySeconds: Double = 0
+  var maxQueueDelaySeconds: Double = 0
+  var lastBufferDurationSeconds: Double = 0
+  var consecutiveErrorBeganAt: Date?
   var error = ""
 }
 
 final class ShazamRecognizer: NSObject, SHSessionDelegate {
+  private let confirmationWindow: TimeInterval = 15
+  private let staleAfter: TimeInterval = 30
   private let queue = DispatchQueue(label: "dev.iamdobhal.vinyl-sync.shazam", qos: .userInitiated)
   private let lock = NSLock()
-  private let onMatch: (ShazamMatchResult) -> Void
+  private let onConfirmedMatch: (ShazamMatchResult, Bool) -> Void
 
   private var session = SHSession()
   private var audioFormat: AVAudioFormat?
   private var sampleTime: AVAudioFramePosition = 0
   private var statusValue = ShazamRecognitionStatus()
+  private var candidateIdentity = ""
+  private var candidateFirstSeen = Date.distantPast
+  private var confirmedIdentity = ""
 
-  init(onMatch: @escaping (ShazamMatchResult) -> Void) {
-    self.onMatch = onMatch
+  init(onConfirmedMatch: @escaping (ShazamMatchResult, Bool) -> Void) {
+    self.onConfirmedMatch = onConfirmedMatch
     super.init()
     session.delegate = self
   }
@@ -48,7 +78,7 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
       guard [16_000, 32_000, 44_100, 48_000].contains(sampleRate) else {
         self.updateStatus {
           $0.sampleRate = sampleRate
-          $0.state = "unsupported audio format"
+          $0.state = "unavailable"
           $0.error = "ShazamKit requires mono PCM at 16, 32, 44.1, or 48 kHz."
         }
         self.audioFormat = nil
@@ -56,25 +86,14 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
       }
 
       guard self.audioFormat?.sampleRate != Double(sampleRate) else { return }
-      self.session = SHSession()
-      self.session.delegate = self
-      self.audioFormat = AVAudioFormat(
-        commonFormat: .pcmFormatFloat32,
-        sampleRate: Double(sampleRate),
-        channels: 1,
-        interleaved: false
-      )
-      self.sampleTime = 0
-      self.updateStatus {
-        $0.sampleRate = sampleRate
-        $0.state = "listening"
-        $0.error = ""
-      }
+      self.resetSession(sampleRate: sampleRate)
     }
   }
 
   func receive(float32MonoPCM data: Data) {
     guard !data.isEmpty else { return }
+    let receivedHostTime = mach_absolute_time()
+    let receivedUptime = ProcessInfo.processInfo.systemUptime
     queue.async {
       guard let format = self.audioFormat else { return }
       let frameCount = data.count / MemoryLayout<Float>.size
@@ -92,33 +111,97 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
         destination.update(from: baseAddress.assumingMemoryBound(to: Float.self), count: frameCount)
       }
 
-      let time = AVAudioTime(sampleTime: self.sampleTime, atRate: format.sampleRate)
+      let duration = Double(frameCount) / format.sampleRate
+      let queueDelay = max(0, ProcessInfo.processInfo.systemUptime - receivedUptime)
+      let durationTicks = AVAudioTime.hostTime(forSeconds: duration)
+      // Receipt is an approximation of the buffer end, not a source capture timestamp.
+      // Include host time so Shazam can relate the audio clock to real elapsed time.
+      let startHostTime = receivedHostTime > durationTicks ? receivedHostTime - durationTicks : 0
+      let time = AVAudioTime(hostTime: startHostTime, sampleTime: self.sampleTime, atRate: format.sampleRate)
       self.sampleTime += AVAudioFramePosition(frameCount)
       self.session.matchStreamingBuffer(buffer, at: time)
       self.updateStatus {
+        $0.lastQueueDelaySeconds = queueDelay
+        $0.maxQueueDelaySeconds = max($0.maxQueueDelaySeconds, queueDelay)
+        $0.lastBufferDurationSeconds = duration
         $0.submittedFrames += UInt64(frameCount)
-        $0.state = "listening"
+        if $0.state == "waiting" { $0.state = "listening" }
       }
+    }
+  }
+
+  func skipSilent(frameCount: Int) {
+    guard frameCount > 0 else { return }
+    queue.async {
+      self.updateStatus {
+        $0.silentFramesSkipped += UInt64(frameCount)
+        $0.silentBuffersSkipped += 1
+        if $0.lastMatch == nil && $0.candidateMatches == 0 {
+          $0.state = "waiting for sound"
+        }
+      }
+    }
+  }
+
+  func clearPlayback(completion: @escaping () -> Void) {
+    queue.async {
+      if let format = self.audioFormat {
+        self.resetSession(sampleRate: Int(format.sampleRate))
+      }
+      completion()
     }
   }
 
   func disconnect() {
     queue.async {
-      self.audioFormat = nil
-      self.sampleTime = 0
       self.session = SHSession()
       self.session.delegate = self
-      self.updateStatus { $0.state = "waiting for audio" }
+      self.audioFormat = nil
+      self.sampleTime = 0
+      self.candidateIdentity = ""
+      self.candidateFirstSeen = .distantPast
+      self.confirmedIdentity = ""
+      self.updateStatus { $0 = ShazamRecognitionStatus() }
+    }
+  }
+
+  func rejectCurrentMatch() {
+    queue.async {
+      self.candidateIdentity = ""
+      self.candidateFirstSeen = .distantPast
+      self.confirmedIdentity = ""
+      self.updateStatus {
+        $0.lastMatch = nil
+        $0.latestObservation = nil
+        $0.candidateTitle = ""
+        $0.candidateArtist = ""
+        $0.candidateMatches = 0
+        $0.confirmedAt = nil
+        $0.state = self.audioFormat == nil ? "waiting" : "listening"
+        $0.error = ""
+      }
     }
   }
 
   func status() -> ShazamRecognitionStatus {
     lock.lock()
-    defer { lock.unlock() }
-    return statusValue
+    var snapshot = statusValue
+    let now = Date()
+    if let errorBeganAt = snapshot.consecutiveErrorBeganAt,
+       now.timeIntervalSince(errorBeganAt) >= staleAfter,
+       snapshot.lastSuccessfulMatchAt.map({ now.timeIntervalSince($0) >= staleAfter }) ?? true {
+      snapshot.state = "unavailable"
+      snapshot.error = snapshot.lastError
+    } else if snapshot.lastMatch != nil,
+              let lastSuccess = snapshot.lastSuccessfulMatchAt,
+              now.timeIntervalSince(lastSuccess) >= staleAfter {
+      snapshot.state = "stale"
+    }
+    lock.unlock()
+    return snapshot
   }
 
-  func session(_ session: SHSession, didFind match: SHMatch) {
+  func session(_ callbackSession: SHSession, didFind match: SHMatch) {
     guard let item = match.mediaItems.first else { return }
     let result = ShazamMatchResult(
       shazamID: item.shazamID ?? "",
@@ -131,27 +214,110 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
       matchOffsetSeconds: item.matchOffset,
       predictedOffsetSeconds: item.predictedCurrentMatchOffset,
       frequencySkew: item.frequencySkew,
-      matchedAt: Date()
+      matchedAt: Date(),
+      queryDurationSeconds: match.querySignature.duration
     )
 
-    updateStatus {
-      $0.matches += 1
-      $0.lastMatch = result
-      $0.state = "matched"
-      $0.error = ""
+    queue.async {
+      guard callbackSession === self.session else { return }
+      self.process(result)
     }
-    onMatch(result)
   }
 
-  func session(_ session: SHSession, didNotFindMatchFor signature: SHSignature, error: Error?) {
-    guard let error else {
-      updateStatus { $0.state = "listening" }
+  func session(_ callbackSession: SHSession, didNotFindMatchFor signature: SHSignature, error: Error?) {
+    queue.async {
+      guard callbackSession === self.session else { return }
+      let now = Date()
+      self.updateStatus {
+        $0.noMatches += 1
+        guard let error else {
+          if $0.lastMatch == nil && $0.candidateMatches == 0 { $0.state = "listening" }
+          return
+        }
+        $0.transientErrors += 1
+        $0.lastError = error.localizedDescription
+        $0.lastErrorAt = now
+        if $0.consecutiveErrorBeganAt == nil { $0.consecutiveErrorBeganAt = now }
+      }
+    }
+  }
+
+  private func resetSession(sampleRate: Int) {
+    session = SHSession()
+    session.delegate = self
+    audioFormat = AVAudioFormat(
+      commonFormat: .pcmFormatFloat32,
+      sampleRate: Double(sampleRate),
+      channels: 1,
+      interleaved: false
+    )
+    sampleTime = 0
+    candidateIdentity = ""
+    candidateFirstSeen = .distantPast
+    confirmedIdentity = ""
+    updateStatus {
+      $0 = ShazamRecognitionStatus()
+      $0.sampleRate = sampleRate
+      $0.state = "listening"
+    }
+  }
+
+  private func process(_ result: ShazamMatchResult) {
+    let now = result.matchedAt
+    let identity = result.identity
+    if identity == confirmedIdentity {
+      updateStatus {
+        $0.matches += 1
+        $0.latestObservation = result
+        $0.lastMatch = result
+        $0.lastSuccessfulMatchAt = now
+        $0.state = "confirmed"
+        $0.error = ""
+        $0.consecutiveErrorBeganAt = nil
+        $0.candidateMatches = 0
+        $0.candidateTitle = ""
+        $0.candidateArtist = ""
+      }
+      onConfirmedMatch(result, false)
       return
     }
-    updateStatus {
-      $0.state = "recognition error"
-      $0.error = error.localizedDescription
+
+    let agreesWithCandidate = identity == candidateIdentity
+      && now.timeIntervalSince(candidateFirstSeen) <= confirmationWindow
+    if agreesWithCandidate {
+      updateStatus { $0.candidateMatches += 1 }
+    } else {
+      candidateIdentity = identity
+      candidateFirstSeen = now
+      updateStatus { $0.candidateMatches = 1 }
     }
+
+    var shouldConfirm = false
+    updateStatus {
+      $0.matches += 1
+      $0.latestObservation = result
+      $0.lastSuccessfulMatchAt = now
+      $0.candidateTitle = result.title
+      $0.candidateArtist = result.artist
+      $0.state = "candidate"
+      $0.error = ""
+      $0.consecutiveErrorBeganAt = nil
+      shouldConfirm = $0.candidateMatches >= 2
+    }
+
+    guard shouldConfirm else { return }
+    confirmedIdentity = identity
+    candidateIdentity = ""
+    candidateFirstSeen = .distantPast
+    updateStatus {
+      $0.lastMatch = result
+      $0.confirmedAt = now
+      $0.state = "confirmed"
+      $0.candidateMatches = 0
+      $0.candidateTitle = ""
+      $0.candidateArtist = ""
+    }
+    onConfirmedMatch(result, true)
   }
 
   private func updateStatus(_ mutate: (inout ShazamRecognitionStatus) -> Void) {

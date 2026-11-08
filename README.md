@@ -1,118 +1,134 @@
 # Vinyl Sync
 
-Local vinyl-to-Spotify sync system.
-
-## Architecture
+Vinyl Sync recognizes a record playing through a Windows audio input and silently mirrors the same track and position to Spotify. A Mac coordinator runs ShazamKit recognition and can optionally show the exact pressing from the listener's Discogs collection.
 
 ```text
-Windows tray agent
-  Captures MOTU input via WASAPI
-  Streams little-endian float32 mono PCM to the Mac over WebSocket
-
-Mac coordinator
-  Serves the control/status UI at http://192.168.1.3:4739
-  Receives audio at ws://192.168.1.3:4739/audio
-  Feeds incoming PCM to ShazamKit for public-catalog recognition
-  Maps Shazam matches to Spotify by ISRC and starts at the recognized offset
-  Tracks an album side from needle drop, elapsed time, and silence gaps
-  Searches Spotify albums and controls playback on the Windows Spotify device named CUTE-GAMING
+turntable / interface
+  -> Windows WASAPI tray agent
+  -> float32 mono PCM over a LAN WebSocket
+  -> signed macOS ShazamKit coordinator
+  -> confirmed track + safe local offset clock
+  -> muted Spotify Connect playback
+  -> optional owned-pressing context from Discogs
 ```
 
-## Defaults
+No album, side, or track selection is required during playback. New tracks require two agreeing Shazam matches; silence is not submitted to ShazamKit; duplicate callbacks and implausible offset jumps do not replay or seek Spotify.
 
-```text
-Mac host: 192.168.1.3
-Mac port: 4739
-Spotify target device: CUTE-GAMING
-Spotify redirect URI: http://127.0.0.1:4739/callback
-Windows config: %APPDATA%\VinylSync\config.json
-```
+## Requirements
 
-## Development Slices
+- Windows 10/11 machine connected to the turntable or audio interface
+- macOS 14 or newer on the coordinator Mac
+- Spotify Premium and a Spotify developer application
+- paid Apple Developer team with ShazamKit enabled for the macOS App ID
+- optional Discogs account and personal access token
+- both computers reachable on the same LAN
 
-1. Mac coordinator status page and WebSocket audio receiver.
-2. Windows tray agent with input selection and PCM streaming.
-3. Mac RMS/status display for incoming audio.
-4. Album/side timing engine with needle-drop and silence-gap detection.
-5. Spotify OAuth, album search, and playback control.
-6. Sync policy and drift correction.
+## First-time setup
 
-## Mac Coordinator
+### 1. Mac coordinator
+
+Build the app locally:
 
 ```bash
 cd mac-coordinator
 ./build.sh
-".build/debug/Vinyl Sync Coordinator.app/Contents/MacOS/vinyl-sync-coordinator" 4739
 ```
 
-Open from the PC:
+Public-catalog Shazam recognition requires a signed build whose explicit App ID has the ShazamKit App Service enabled. The Xcode project contains `Debug`, `Release` (App Store/TestFlight), and `Direct` configurations. Select the Apple Developer team and use the Bundle ID registered for ShazamKit; this repository currently uses `dev.iamdobhal.vinylsync`.
 
-```text
-http://192.168.1.3:4739
-```
-
-Spotify credentials are read from environment variables or an ignored `.env` file:
-
-```text
-SPOTIFY_CLIENT_ID=...
-SPOTIFY_CLIENT_SECRET=...
-VINYL_SYNC_SPOTIFY_REDIRECT_URI=http://127.0.0.1:4739/callback
-```
-
-Spotify rejects plain LAN HTTP callback URLs. Complete OAuth from a browser on the Mac at:
-
-```text
-http://127.0.0.1:4739
-```
-
-After that, the PC can use the coordinator UI at `http://192.168.1.3:4739`.
-
-### ShazamKit signing
-
-Public Shazam-catalog recognition requires a paid Apple Developer team and a provisioned macOS App ID with the ShazamKit App Service enabled. The build produces a proper app bundle but leaves it unsigned for local development.
-
-Ask the Apple Developer team owner/admin to:
-
-1. Register an explicit macOS App ID. The default bundle ID is `dev.iamdobhal.vinyl-sync`.
-2. Enable ShazamKit for that App ID.
-3. Create a macOS development provisioning profile for the App ID and Mac.
-4. Install a matching Apple Development certificate in the signing Mac's keychain.
-
-If the team uses a different App ID, build with that exact identifier:
+For a development-signed command-line build:
 
 ```bash
-VINYL_SYNC_BUNDLE_ID=com.example.vinylsync ./build.sh
+./sign.sh "Apple Development: Developer Name (TEAMID)" /path/to/profile.provisionprofile
+open ".build/debug/Vinyl Sync Coordinator.app"
 ```
 
-Sign and verify the bundle:
+For the current owner-signed Mac build (version 0.3.0, build 6):
+
+```sh
+xcodebuild -project mac-coordinator/VinylSyncCoordinator.xcodeproj \
+  -scheme VinylSyncCoordinator -configuration Direct \
+  -derivedDataPath mac-coordinator/.build/owner-signed \
+  DEVELOPMENT_TEAM=4FFCQ5BLJT -allowProvisioningUpdates build
+```
+
+Register the explicit App ID `dev.iamdobhal.vinylsync` under Ayam's team (`4FFCQ5BLJT`) and enable **App Services → ShazamKit** in the Apple Developer portal. The previous Sumit-signed identifier is separate; signing successfully does not enable this service automatically. Direct is the non-sandboxed local testing configuration and retains the existing Application Support data location. A team change may require approving Keychain access or signing in to Spotify again.
+
+Do not add the iOS-only `com.apple.developer.shazamkit` entitlement manually. ShazamKit access on macOS is enabled on the App ID. The App Store target uses its sandbox/network entitlements; the Direct target is available for direct distribution and diagnostics.
+
+Open `http://127.0.0.1:4739` on the Mac, then use **Settings** to configure:
+
+- Spotify client ID and secret
+- redirect URI, normally `http://127.0.0.1:4739/callback`
+- Spotify Connect target device
+- optional Discogs username and token
+
+Secrets are stored in Keychain. Non-secret settings, Spotify tokens, and remembered pressing choices are stored under `~/Library/Application Support/VinylSyncCoordinator/`.
+
+The Spotify redirect URI must exactly match one registered in the Spotify developer dashboard. Complete OAuth from the Mac through the loopback URL; plain HTTP LAN callback addresses are not accepted by Spotify.
+
+### 2. Windows tray agent
+
+Windows artifacts are built by GitHub Actions. Run the agent and use its tray menu to configure:
+
+- **Select Input Device**: choose the WASAPI capture input carrying the record
+- **Coordinator**: enter the Mac hostname or LAN address and port
+- **Reconnect**: reconnect after changing either setting
+
+Configuration is stored at `%APPDATA%\VinylSync\config.json`. The agent reconnects automatically after transient coordinator or network failures.
+
+The coordinator URL is `http://<mac-host>:4739`; its audio WebSocket is `ws://<mac-host>:4739/audio`. Allow inbound TCP port `4739` through the Mac firewall. No address, Windows input, Spotify device, or Discogs user is hardcoded.
+
+## Normal use
+
+1. Start the signed Mac coordinator and Windows tray agent.
+2. Make sure the chosen Spotify target is online.
+3. Play a record.
+
+The main page shows audio, Shazam, and Spotify health; recognized artwork and track progress; and pressing details when Discogs can resolve them confidently. If multiple owned pressings match, choose once and Vinyl Sync remembers the release for that artist and album.
+
+Recovery controls are intentionally small:
+
+- **Resync** resolves and seeks the current confirmed track again.
+- **Wrong match** discards the current confirmation and waits for fresh evidence.
+- **Diagnostics** exposes stream, recognition, offset, and error counters.
+
+## Development and validation
+
+Build the macOS app:
 
 ```bash
-./sign.sh "Apple Development: Developer Name (TEAMID)" /path/to/VinylSync.provisionprofile
+cd mac-coordinator
+./build.sh
 ```
 
-Run the signed executable from inside the bundle:
+Run it on a non-default port without replacing an installed build:
 
 ```bash
-".build/debug/Vinyl Sync Coordinator.app/Contents/MacOS/vinyl-sync-coordinator" 4739
+".build/debug/Vinyl Sync Coordinator.app/Contents/MacOS/vinyl-sync-coordinator" 4740
 ```
 
-Recognition health and the most recent match are exposed under `shazam` at `GET /status`. Until the app is signed for the ShazamKit-enabled App ID, audio ingestion works but public-catalog requests are expected to return a ShazamKit authorization/service error.
+The Windows CI workflow restores and publishes a self-contained .NET 8 `win-x64` tray artifact. Local Windows build:
 
-On macOS, ShazamKit access is associated with the App ID on Apple's service; do not manually add the iOS-style `com.apple.developer.shazamkit` entitlement. This app also intentionally does not enable App Sandbox, because sandboxing can block access to the local Shazam matching service and surface error 202.
-
-## Windows Agent
-
-Windows builds are produced by GitHub Actions. The app is a system tray agent with:
-
-```text
-Select Input Device
-Exit
+```powershell
+dotnet publish windows-tray-agent/VinylSync.Agent/VinylSync.Agent.csproj `
+  -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
 
-The agent starts streaming as soon as it launches. Selecting a different input device restarts the stream with that device. To stop streaming, exit the tray app.
+Useful coordinator endpoints:
 
-The agent stores configuration at:
+- `GET /status`
+- `GET/POST /api/config`
+- `GET /spotify/login`
+- `GET /spotify/devices`
+- `POST /sync/resync`
+- `POST /sync/wrong-match`
+- `POST /discogs/select-pressing`
+- `GET /audio` with a WebSocket upgrade
 
-```text
-%APPDATA%\VinylSync\config.json
-```
+Before distributing a build, verify the app signature and embedded entitlements, exercise Spotify OAuth and device discovery, connect a real PCM stream, and test at least one full record side including a track transition.
+
+## Security
+
+Never commit Apple certificates, `.p12` files, private keys, provisioning profiles, Spotify secrets/tokens, or Discogs tokens. Signed `.app` bundles belong in private release artifacts, not Git history.
