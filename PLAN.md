@@ -1,5 +1,7 @@
 # Vinyl Sync Automation Plan
 
+> Historical design proposal, written before PR #2. This is not a checklist of shipped features. See [README.md](README.md) for current behavior and validation commands. In particular, duration-ranked resolution, a Shazam-to-Spotify cache, configurable correction thresholds, and side-only playback are not implemented. Current playback uses an album context, prefers confirmed/owned album candidates, and uses a fixed 1-second correction threshold.
+
 ## Goal
 
 Turn Vinyl Sync into a near-zero-interaction appliance:

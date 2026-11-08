@@ -1,0 +1,21 @@
+name: macOS Coordinator
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regression checks
+        run: ./mac-coordinator/test.sh
+      - name: Build ad-hoc app
+        run: ./mac-coordinator/build.sh
+      - name: Verify bundle
+        run: |
+          plutil -lint "mac-coordinator/.build/debug/Vinyl Sync Coordinator.app/Contents/Info.plist"
+          codesign --verify --deep --strict "mac-coordinator/.build/debug/Vinyl Sync Coordinator.app"
