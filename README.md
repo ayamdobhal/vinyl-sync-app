@@ -1,6 +1,6 @@
 # Vinyl Sync
 
-Vinyl Sync recognizes a record playing through a Windows audio input and silently mirrors the same track and position to Spotify. A Mac coordinator runs ShazamKit recognition and can optionally show the exact pressing from the listener's Discogs collection.
+Vinyl Sync recognizes a record playing through a Windows audio input and silently mirrors the same track and position to Spotify. A Mac coordinator runs ShazamKit recognition and can optionally show a matching owned pressing from the listener's Discogs collection.
 
 ```text
 turntable / interface
@@ -27,7 +27,7 @@ No album, side, or track selection is required during playback. New tracks requi
 
 ### 1. Mac coordinator
 
-Build the app locally:
+From the repository root, build an **ad-hoc signed development bundle** (this alone does not establish public-catalog ShazamKit access):
 
 ```bash
 cd mac-coordinator
@@ -43,7 +43,7 @@ For a development-signed command-line build:
 open ".build/debug/Vinyl Sync Coordinator.app"
 ```
 
-For the current owner-signed Mac build (version 0.3.0, build 6):
+For the current owner-signed Mac build (version 0.3.0, build 12), run **from the repository root**:
 
 ```sh
 xcodebuild -project mac-coordinator/VinylSyncCoordinator.xcodeproj \
@@ -52,9 +52,11 @@ xcodebuild -project mac-coordinator/VinylSyncCoordinator.xcodeproj \
   DEVELOPMENT_TEAM=4FFCQ5BLJT -allowProvisioningUpdates build
 ```
 
+The built app is at `mac-coordinator/.build/owner-signed/Build/Products/Direct/Vinyl Sync Coordinator.app`.
+
 Register the explicit App ID `dev.iamdobhal.vinylsync` under Ayam's team (`4FFCQ5BLJT`) and enable **App Services → ShazamKit** in the Apple Developer portal. The previous Sumit-signed identifier is separate; signing successfully does not enable this service automatically. Direct is the non-sandboxed local testing configuration and retains the existing Application Support data location. A team change may require approving Keychain access or signing in to Spotify again.
 
-Do not add the iOS-only `com.apple.developer.shazamkit` entitlement manually. ShazamKit access on macOS is enabled on the App ID. The App Store target uses its sandbox/network entitlements; the Direct target is available for direct distribution and diagnostics.
+Do not add the iOS-only `com.apple.developer.shazamkit` entitlement manually. ShazamKit access on macOS is enabled on the App ID. The App Store target uses its sandbox/network entitlements; the Direct target is available for local testing and diagnostics. An Apple Development signature is not a notarized public-distribution build; broader distribution needs appropriate signing and notarization.
 
 Open `http://127.0.0.1:4739` on the Mac, then use **Settings** to configure:
 
@@ -93,7 +95,26 @@ Recovery controls are intentionally small:
 - **Wrong match** discards the current confirmation and waits for fresh evidence.
 - **Diagnostics** exposes stream, recognition, offset, and error counters.
 
+## Resolution, timing, and limits
+
+- Spotify searches by ISRC first. An empty result falls back to normalized exact track title and artist. Among the returned recording candidates, the resolver prefers the previously confirmed owned album, then an album in the Discogs collection, then the first playable candidate. It currently examines up to five search results, not the entire catalogue.
+- Spotify playback uses an **album context** with the recognized track and position. The remaining album may play beyond a physical side; there is no side-only queue, playlist creation, or automatic pause when the needle lifts.
+- Discogs is optional. Owned-pressing matching compares album/artist metadata and remembers a choice when multiple owned releases match. It does not identify a physical pressing from audio or prove which of several copies is on the turntable. A missing pressing does not prevent playback. A collection refresh can add startup latency.
+- Positions advance using monotonic time, including time spent preparing Spotify requests. The current build adds a fixed 1-second playback lead. Smoothed cumulative drift of at least 1 second can trigger correction, at most once per 30 seconds. These values are source constants, not Settings controls.
+- The Spotify status distinguishes a request being accepted from playback confirmed by a subsequent device/track check. That one-time check is not continuous playback monitoring. Its timing estimate is diagnostic, not a guarantee of sub-second lyric or speaker alignment.
+- Ten seconds without audio buffers clears the stream state. A completed track plus at least five seconds of silence clears recognition metadata. Neither operation pauses Spotify.
+
+If recognition works but Spotify does not, open **Diagnostics** and check its last action/error, ensure the selected Spotify device is available, then use **Resync**. A single or compilation can still be chosen when an owned-album candidate is absent. Unknown or unavailable pressing metadata is separate from Spotify playback health.
+
 ## Development and validation
+
+From the repository root, run the regression checks:
+
+```bash
+./mac-coordinator/test.sh
+```
+
+These cover monotonic timing, gradual drift, silence expiry, and album-candidate selection without Spotify credentials or Shazam service access. macOS CI also builds the ad-hoc app; signed recognition and full vinyl playback still require live testing.
 
 Build the macOS app:
 
@@ -130,5 +151,8 @@ Useful coordinator endpoints:
 Before distributing a build, verify the app signature and embedded entitlements, exercise Spotify OAuth and device discovery, connect a real PCM stream, and test at least one full record side including a track transition.
 
 ## Security
+
+The coordinator binds to all interfaces. Its HTTP settings/control endpoints and audio WebSocket have **no client authentication or transport encryption**. Run it only on a trusted LAN and do not forward port `4739` to the internet. Anyone with network access can reach these controls.
+
 
 Never commit Apple certificates, `.p12` files, private keys, provisioning profiles, Spotify secrets/tokens, or Discogs tokens. Signed `.app` bundles belong in private release artifacts, not Git history.
