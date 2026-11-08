@@ -108,18 +108,28 @@ final class SpotifyClient {
     try trackResolution(isrc: isrc, title: title, artist: artist).uri
   }
 
-  func trackResolution(isrc: String, title: String, artist: String) throws -> SpotifyTrackResolution {
-    let query: String
-    if !isrc.isEmpty {
-      query = "isrc:\(isrc)"
-    } else {
-      query = "track:\"\(title)\" artist:\"\(artist)\""
+  func trackResolution(isrc: String, title: String, artist: String,
+                       preferredAlbumID: String = "", ownedAlbums: Set<String> = []) throws -> SpotifyTrackResolution {
+    func search(_ query: String) throws -> [[String: Any]] {
+      let characters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+      let encoded = query.addingPercentEncoding(withAllowedCharacters: characters) ?? query
+      let json = try api("GET", "/search?q=\(encoded)&type=track&limit=5")
+      return ((json["tracks"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
     }
-    let queryCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-    let encoded = query.addingPercentEncoding(withAllowedCharacters: queryCharacters) ?? query
-    let json = try api("GET", "/search?q=\(encoded)&type=track&limit=5")
-    let items = ((json["tracks"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
-    guard let track = items.first,
+    func normalized(_ value: String) -> String {
+      value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+        .components(separatedBy: CharacterSet.alphanumerics.inverted).joined()
+    }
+    var items = isrc.isEmpty ? [] : try search("isrc:\(isrc)")
+    if items.isEmpty {
+      items = try search("track:\"\(title)\" artist:\"\(artist)\"").filter { track in
+        normalized(track["name"] as? String ?? "") == normalized(title)
+          && ((track["artists"] as? [[String: Any]]) ?? []).contains {
+            normalized($0["name"] as? String ?? "") == normalized(artist)
+          }
+      }
+    }
+    guard let track = SpotifyAlbumPreference.select(items, preferredAlbumID: preferredAlbumID, ownedAlbums: ownedAlbums),
           let uri = track["uri"] as? String, !uri.isEmpty else {
       throw NSError(
         domain: "Spotify",
@@ -160,18 +170,64 @@ final class SpotifyClient {
     }
   }
 
-  func play(uri: String, positionMs: Int, reason: String) {
+  func play(uri: String, albumId: String, position: PlaybackPosition, reason: String,
+            isCurrent: @escaping () -> Bool) {
+    // User-calibrated lead, separate from measured request preparation time.
+    let playbackLeadSeconds = 1.0
     DispatchQueue.global(qos: .userInitiated).async {
       do {
+        guard isCurrent() else { return }
         let deviceId = try self.targetDeviceId()
+        guard isCurrent() else { return }
         _ = try self.api("PUT", "/me/player/volume?volume_percent=0&device_id=\(deviceId)", emptyOK: true)
-        let body = try JSONSerialization.data(withJSONObject: [
-          "uris": [uri],
-          "position_ms": max(0, positionMs)
-        ])
-        _ = try self.api("PUT", "/me/player/play?device_id=\(deviceId)", body: body, emptyOK: true)
-        self.setAction("playing \(reason)", error: "")
+        var sentAt: TimeInterval = 0
+        var sentPosition: Double = 0
+        // Construct the body after token refresh and all preparation requests.
+        _ = try self.api("PUT", "/me/player/play?device_id=\(deviceId)", emptyOK: true, makeBody: {
+          guard isCurrent() else { throw CancellationError() }
+          sentAt = ProcessInfo.processInfo.systemUptime
+          sentPosition = position.seconds(at: sentAt) + playbackLeadSeconds
+          return try JSONSerialization.data(withJSONObject: [
+            "context_uri": "spotify:album:\(albumId)",
+            "offset": ["uri": uri], "position_ms": Int(sentPosition * 1000)
+          ])
+        })
+        let responseAt = ProcessInfo.processInfo.systemUptime
+        guard isCurrent() else { return }
+        let timing = String(format: "advanced %.2fs; lead +%.1fs; play request %.2fs",
+                            max(0, sentAt - position.observedUptime), playbackLeadSeconds, responseAt - sentAt)
+        self.setAction("play requested \(reason) · \(timing)", error: "")
+        print("Spotify timing: \(timing), target \(sentPosition)s")
+        // A reported progress value is diagnostic, not proof of audible alignment.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+          guard isCurrent() else { return }
+          do {
+            let before = ProcessInfo.processInfo.systemUptime
+            let playback = try self.api("GET", "/me/player")
+            let after = ProcessInfo.processInfo.systemUptime
+            guard isCurrent() else { return }
+            guard playback["is_playing"] as? Bool == true,
+                  (playback["item"] as? [String: Any])?["uri"] as? String == uri,
+                  (playback["device"] as? [String: Any])?["id"] as? String == deviceId,
+                  let progressMs = playback["progress_ms"] as? Int else {
+              self.setAction("playback not confirmed", error: "Spotify accepted the request but did not report the requested track playing on the target device. Try Resync.")
+              return
+            }
+            let progress = Double(progressMs) / 1000
+            let lag = position.seconds(at: (before + after) / 2) + playbackLeadSeconds - progress
+            let diagnostic = String(format: "target lag %+.2fs (poll ±%.2fs)", lag, (after - before) / 2)
+            self.setAction("playing \(reason) · \(timing) · \(diagnostic)", error: "")
+            print("Spotify timing: \(diagnostic); positive = Spotify behind lead-adjusted target")
+          } catch {
+            // Diagnostic failure must not label successful playback as failed.
+            if isCurrent() { self.setAction("playback unverified", error: "Could not verify Spotify playback: \(error.localizedDescription)") }
+            print("Spotify timing: playback-state check unavailable")
+          }
+        }
+      } catch is CancellationError {
+        return
       } catch {
+        guard isCurrent() else { return }
         self.setAction("play failed", error: error.localizedDescription)
       }
     }
@@ -236,7 +292,7 @@ final class SpotifyClient {
     }
   }
 
-  private func api(_ method: String, _ path: String, body: Data? = nil, emptyOK: Bool = false) throws -> [String: Any] {
+  private func api(_ method: String, _ path: String, body: Data? = nil, emptyOK: Bool = false, makeBody: (() throws -> Data)? = nil) throws -> [String: Any] {
     guard refreshIfNeeded() else {
       throw NSError(domain: "Spotify", code: 3, userInfo: [NSLocalizedDescriptionKey: "Spotify is not connected."])
     }
@@ -247,7 +303,7 @@ final class SpotifyClient {
     var request = URLRequest(url: URL(string: "https://api.spotify.com/v1\(path)")!)
     request.httpMethod = method
     request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-    if let body {
+    if let body = try makeBody?() ?? body {
       request.httpBody = body
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     }
@@ -302,6 +358,10 @@ final class SpotifyClient {
     if let data = try? JSONEncoder().encode(newToken) {
       try? data.write(to: tokenURL)
     }
+  }
+
+  func reportResolutionFailure(_ error: Error) {
+    setAction("track lookup failed", error: error.localizedDescription)
   }
 
   private func setAction(_ action: String, error: String) {
@@ -372,6 +432,12 @@ final class DiscogsClient {
     lastError = ""
     lock.unlock()
     return releases
+  }
+
+  func ownedAlbumKeys() throws -> Set<String> {
+    Set(try collection().map {
+      SpotifyAlbumPreference.key(title: $0["title"] as? String ?? "", artist: $0["artists"] as? String ?? "")
+    })
   }
 
   func matchOwnedRelease(album: String, artist: String, preferredReleaseID: Int? = nil) throws -> [String: Any]? {
@@ -580,6 +646,8 @@ struct AudioSnapshot {
   var streamSeconds: Double = 0
   var rms: Float = 0
   var lastSeen = Date.distantPast
+  var lastBufferUptime: TimeInterval = 0
+  var lastSoundUptime: TimeInterval = 0
 }
 
 final class AudioStateStore {
@@ -597,6 +665,8 @@ final class AudioStateStore {
     snapshot.streamSeconds = 0
     snapshot.rms = 0
     snapshot.lastSeen = Date()
+    snapshot.lastBufferUptime = ProcessInfo.processInfo.systemUptime
+    snapshot.lastSoundUptime = snapshot.lastBufferUptime
     lock.unlock()
   }
 
@@ -608,6 +678,8 @@ final class AudioStateStore {
       snapshot.streamSeconds = Double(snapshot.frameCount) / Double(snapshot.sampleRate)
     }
     snapshot.rms = rms
+    snapshot.lastBufferUptime = ProcessInfo.processInfo.systemUptime
+    if rms > Float(silenceThreshold) { snapshot.lastSoundUptime = snapshot.lastBufferUptime }
     snapshot.lastSeen = Date()
     lock.unlock()
   }
@@ -642,6 +714,7 @@ final class CoordinatorServer {
   private let shazamPlaybackLock = NSLock()
   private var currentShazamPlaybackID = ""
   private var currentShazamPlaybackURI = ""
+  private var currentShazamPlaybackAlbumID = ""
   private let metadataLock = NSLock()
   private var resolvedTrackPayload: [String: Any]?
   private var pressingState = "waiting"
@@ -660,6 +733,9 @@ final class CoordinatorServer {
     }
     listener.start(queue: .global(qos: .userInitiated))
     print("vinyl-sync coordinator listening on http://0.0.0.0:\(port.rawValue)")
+    Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+      self?.expireInactivePlayback()
+    }
     RunLoop.main.run()
   }
 
@@ -890,6 +966,10 @@ final class CoordinatorServer {
   }
 
   private func handleAudio(_ payload: Data) {
+    let previous = state.currentSnapshot()
+    if !previous.audioConnected, previous.sampleRate > 0 {
+      shazam.configure(sampleRate: previous.sampleRate)
+    }
     let sampleCount = payload.count / MemoryLayout<Float>.size
     var sum: Float = 0
 
@@ -920,40 +1000,73 @@ final class CoordinatorServer {
       DispatchQueue.global(qos: .userInitiated).async { [weak self, spotify] in
         guard let self else { return }
         do {
+          self.metadataLock.lock()
+          let preferredAlbumID = self.pressingState == "matched"
+            ? self.resolvedTrackPayload?["albumId"] as? String ?? "" : ""
+          self.metadataLock.unlock()
+          // Collection lookup failure must not prevent Spotify playback.
+          let ownedAlbums = (try? self.discogs.ownedAlbumKeys()) ?? []
           let resolution = try spotify.trackResolution(
             isrc: match.isrc,
             title: match.title,
-            artist: match.artist
+            artist: match.artist,
+            preferredAlbumID: preferredAlbumID,
+            ownedAlbums: ownedAlbums
           )
           guard self.offsetTracker.status().trackIdentity == identity else { return }
           self.shazamPlaybackLock.lock()
           self.currentShazamPlaybackID = identity
           self.currentShazamPlaybackURI = resolution.uri
+          self.currentShazamPlaybackAlbumID = resolution.albumId
           self.shazamPlaybackLock.unlock()
           self.updateResolvedTrack(resolution)
           spotify.play(
             uri: resolution.uri,
-            positionMs: Int(positionSeconds * 1000),
-            reason: "Shazam confirmed \(match.artist) — \(match.title)"
+            albumId: resolution.albumId,
+            position: PlaybackPosition(seconds: positionSeconds, observedUptime: match.matchedUptime),
+            reason: "Shazam confirmed \(match.artist) — \(match.title)",
+            isCurrent: { self.offsetTracker.status().trackIdentity == identity }
           )
           self.resolvePressing(for: resolution)
         } catch {
+          spotify.reportResolutionFailure(error)
           print("Shazam match could not be mapped to Spotify: \(error.localizedDescription)")
         }
       }
     case let .correct(positionSeconds):
       shazamPlaybackLock.lock()
       let uri = currentShazamPlaybackID == match.identity ? currentShazamPlaybackURI : ""
+      let albumId = currentShazamPlaybackAlbumID
       shazamPlaybackLock.unlock()
       guard !uri.isEmpty else { return }
-      DispatchQueue.global(qos: .userInitiated).async { [spotify] in
+      DispatchQueue.global(qos: .userInitiated).async { [weak self, spotify] in
         spotify.play(
           uri: uri,
-          positionMs: Int(positionSeconds * 1000),
-          reason: "Shazam drift correction for \(match.artist) — \(match.title)"
+          albumId: albumId,
+          position: PlaybackPosition(seconds: positionSeconds, observedUptime: match.matchedUptime),
+          reason: "Shazam drift correction for \(match.artist) — \(match.title)",
+          isCurrent: { self?.offsetTracker.status().trackIdentity == match.identity }
         )
       }
     }
+  }
+
+  private func expireInactivePlayback() {
+    let audio = state.currentSnapshot()
+    let now = ProcessInfo.processInfo.systemUptime
+    if audio.audioConnected && now - audio.lastBufferUptime >= 10 {
+      state.disconnectAudio()
+      resetShazamPlayback()
+      return
+    }
+    metadataLock.lock()
+    let duration = resolvedTrackPayload?["durationSeconds"] as? Double ?? 0
+    metadataLock.unlock()
+    let tracking = offsetTracker.status()
+    guard !tracking.trackIdentity.isEmpty,
+          PlaybackExpiry.shouldClear(elapsed: tracking.estimatedOffsetSeconds,
+            duration: duration, silentFor: now - audio.lastSoundUptime) else { return }
+    shazam.clearPlayback { [weak self] in self?.resetOffsetTracking() }
   }
 
   private func resetShazamPlayback() {
@@ -966,6 +1079,7 @@ final class CoordinatorServer {
     shazamPlaybackLock.lock()
     currentShazamPlaybackID = ""
     currentShazamPlaybackURI = ""
+    currentShazamPlaybackAlbumID = ""
     shazamPlaybackLock.unlock()
     metadataLock.lock()
     resolvedTrackPayload = nil
@@ -1003,6 +1117,10 @@ final class CoordinatorServer {
         preferredReleaseID: preferredReleaseID
       )
       metadataLock.lock()
+      guard resolvedTrackPayload?["uri"] as? String == track.uri else {
+        metadataLock.unlock()
+        return
+      }
       pressingMatch = match
       if match?["ambiguous"] as? Bool == true {
         pressingState = "ambiguous"
@@ -1013,6 +1131,10 @@ final class CoordinatorServer {
       metadataLock.unlock()
     } catch {
       metadataLock.lock()
+      guard resolvedTrackPayload?["uri"] as? String == track.uri else {
+        metadataLock.unlock()
+        return
+      }
       pressingState = "unavailable"
       pressingMatch = nil
       pressingError = error.localizedDescription
@@ -1072,6 +1194,9 @@ final class CoordinatorServer {
       "state": status.state,
       "sampleRate": status.sampleRate,
       "submittedFrames": status.submittedFrames,
+      "lastQueueDelaySeconds": status.lastQueueDelaySeconds,
+      "maxQueueDelaySeconds": status.maxQueueDelaySeconds,
+      "lastBufferDurationSeconds": status.lastBufferDurationSeconds,
       "silentFramesSkipped": status.silentFramesSkipped,
       "silentBuffersSkipped": status.silentBuffersSkipped,
       "matches": status.matches,
@@ -1096,6 +1221,7 @@ final class CoordinatorServer {
         "webURL": match.webURL,
         "appleMusicURL": match.appleMusicURL,
         "matchOffsetSeconds": match.matchOffsetSeconds,
+        "queryDurationSeconds": match.queryDurationSeconds,
         "predictedOffsetSeconds": match.predictedOffsetSeconds,
         "frequencySkew": match.frequencySkew,
         "matchedAt": ISO8601DateFormatter().string(from: match.matchedAt)

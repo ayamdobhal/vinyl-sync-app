@@ -1,5 +1,15 @@
 import Foundation
 
+// Position at an observation instant, advanced only with a monotonic clock.
+struct PlaybackPosition {
+  let seconds: Double
+  let observedUptime: TimeInterval
+
+  func seconds(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Double {
+    max(0, seconds + max(0, uptime - observedUptime))
+  }
+}
+
 enum ShazamPlaybackAction {
   case none
   case start(positionSeconds: Double)
@@ -19,14 +29,17 @@ struct PlaybackOffsetStatus {
 final class PlaybackOffsetTracker {
   private let backwardTolerance: Double = 5
   private let forwardTolerance: Double = 10
-  private let correctionThreshold: Double = 3
+  private let correctionThreshold: Double = 1
   private let correctionInterval: TimeInterval = 30
   private let smoothingFactor: Double = 0.2
   private let lock = NSLock()
 
   private var statusValue = PlaybackOffsetStatus()
   private var anchorOffsetSeconds: Double = 0
-  private var anchorDate = Date.distantPast
+  private var anchorUptime: TimeInterval = 0
+  // Separate commanded timeline: smoothing the estimate must not hide accumulated drift.
+  private var commandedPosition: PlaybackPosition?
+  private var lastCorrectionUptime: TimeInterval?
 
   func observe(_ match: ShazamMatchResult, isNewTrack: Bool) -> ShazamPlaybackAction {
     lock.lock()
@@ -45,11 +58,13 @@ final class PlaybackOffsetTracker {
         lastCorrectionAt: match.matchedAt
       )
       anchorOffsetSeconds = observed
-      anchorDate = match.matchedAt
+      anchorUptime = match.matchedUptime
+      commandedPosition = PlaybackPosition(seconds: observed, observedUptime: match.matchedUptime)
+      lastCorrectionUptime = match.matchedUptime
       return .start(positionSeconds: observed)
     }
 
-    let expected = max(0, anchorOffsetSeconds + match.matchedAt.timeIntervalSince(anchorDate))
+    let expected = max(0, anchorOffsetSeconds + max(0, match.matchedUptime - anchorUptime))
     let drift = observed - expected
     statusValue.observedOffsetSeconds = observed
     statusValue.estimatedOffsetSeconds = expected
@@ -63,15 +78,19 @@ final class PlaybackOffsetTracker {
     statusValue.acceptedObservations += 1
     let smoothed = max(0, expected + drift * smoothingFactor)
     anchorOffsetSeconds = smoothed
-    anchorDate = match.matchedAt
+    anchorUptime = match.matchedUptime
     statusValue.estimatedOffsetSeconds = smoothed
 
-    let mayCorrect = abs(drift) >= correctionThreshold
-      && statusValue.lastCorrectionAt.map {
-        match.matchedAt.timeIntervalSince($0) >= correctionInterval
+    let accumulatedDrift = smoothed - (commandedPosition?.seconds(at: match.matchedUptime) ?? expected)
+    statusValue.driftSeconds = accumulatedDrift
+    let mayCorrect = abs(accumulatedDrift) >= correctionThreshold
+      && lastCorrectionUptime.map {
+        match.matchedUptime - $0 >= correctionInterval
       } ?? true
     guard mayCorrect else { return .none }
     statusValue.lastCorrectionAt = match.matchedAt
+    lastCorrectionUptime = match.matchedUptime
+    commandedPosition = PlaybackPosition(seconds: smoothed, observedUptime: match.matchedUptime)
     return .correct(positionSeconds: smoothed)
   }
 
@@ -80,7 +99,7 @@ final class PlaybackOffsetTracker {
     defer { lock.unlock() }
     var snapshot = statusValue
     if !snapshot.trackIdentity.isEmpty {
-      snapshot.estimatedOffsetSeconds = max(0, anchorOffsetSeconds + Date().timeIntervalSince(anchorDate))
+      snapshot.estimatedOffsetSeconds = max(0, anchorOffsetSeconds + max(0, ProcessInfo.processInfo.systemUptime - anchorUptime))
     }
     return snapshot
   }
@@ -89,7 +108,16 @@ final class PlaybackOffsetTracker {
     lock.lock()
     statusValue = PlaybackOffsetStatus()
     anchorOffsetSeconds = 0
-    anchorDate = .distantPast
+    anchorUptime = 0
+    lastCorrectionUptime = nil
+    commandedPosition = nil
     lock.unlock()
+  }
+}
+
+// Require sustained silence as well as track completion; quiet passages alone stay active.
+enum PlaybackExpiry {
+  static func shouldClear(elapsed: Double, duration: Double, silentFor: TimeInterval) -> Bool {
+    duration > 0 && elapsed >= duration && silentFor >= 5
   }
 }

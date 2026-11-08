@@ -14,6 +14,8 @@ struct ShazamMatchResult {
   var predictedOffsetSeconds: Double
   var frequencySkew: Float
   var matchedAt: Date
+  var matchedUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+  var queryDurationSeconds: Double = 0
 
   var identity: String {
     if !shazamID.isEmpty { return shazamID }
@@ -43,6 +45,9 @@ struct ShazamRecognitionStatus {
   var lastSuccessfulMatchAt: Date?
   var lastError = ""
   var lastErrorAt: Date?
+  var lastQueueDelaySeconds: Double = 0
+  var maxQueueDelaySeconds: Double = 0
+  var lastBufferDurationSeconds: Double = 0
   var consecutiveErrorBeganAt: Date?
   var error = ""
 }
@@ -87,6 +92,8 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
 
   func receive(float32MonoPCM data: Data) {
     guard !data.isEmpty else { return }
+    let receivedHostTime = mach_absolute_time()
+    let receivedUptime = ProcessInfo.processInfo.systemUptime
     queue.async {
       guard let format = self.audioFormat else { return }
       let frameCount = data.count / MemoryLayout<Float>.size
@@ -104,10 +111,19 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
         destination.update(from: baseAddress.assumingMemoryBound(to: Float.self), count: frameCount)
       }
 
-      let time = AVAudioTime(sampleTime: self.sampleTime, atRate: format.sampleRate)
+      let duration = Double(frameCount) / format.sampleRate
+      let queueDelay = max(0, ProcessInfo.processInfo.systemUptime - receivedUptime)
+      let durationTicks = AVAudioTime.hostTime(forSeconds: duration)
+      // Receipt is an approximation of the buffer end, not a source capture timestamp.
+      // Include host time so Shazam can relate the audio clock to real elapsed time.
+      let startHostTime = receivedHostTime > durationTicks ? receivedHostTime - durationTicks : 0
+      let time = AVAudioTime(hostTime: startHostTime, sampleTime: self.sampleTime, atRate: format.sampleRate)
       self.sampleTime += AVAudioFramePosition(frameCount)
       self.session.matchStreamingBuffer(buffer, at: time)
       self.updateStatus {
+        $0.lastQueueDelaySeconds = queueDelay
+        $0.maxQueueDelaySeconds = max($0.maxQueueDelaySeconds, queueDelay)
+        $0.lastBufferDurationSeconds = duration
         $0.submittedFrames += UInt64(frameCount)
         if $0.state == "waiting" { $0.state = "listening" }
       }
@@ -124,6 +140,15 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
           $0.state = "waiting for sound"
         }
       }
+    }
+  }
+
+  func clearPlayback(completion: @escaping () -> Void) {
+    queue.async {
+      if let format = self.audioFormat {
+        self.resetSession(sampleRate: Int(format.sampleRate))
+      }
+      completion()
     }
   }
 
@@ -189,7 +214,8 @@ final class ShazamRecognizer: NSObject, SHSessionDelegate {
       matchOffsetSeconds: item.matchOffset,
       predictedOffsetSeconds: item.predictedCurrentMatchOffset,
       frequencySkew: item.frequencySkew,
-      matchedAt: Date()
+      matchedAt: Date(),
+      queryDurationSeconds: match.querySignature.duration
     )
 
     queue.async {
